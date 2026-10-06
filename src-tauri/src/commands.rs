@@ -187,7 +187,7 @@ pub fn messages_list(st: St, query: MessageQuery) -> R<Vec<MessageSummary>> {
 
 async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
     let summary = st.db.summary(id)?.ok_or_else(|| anyhow::anyhow!("Message not found (it may have been moved or deleted)"))?;
-    let body = match st.db.body(id)? {
+    let mut body = match st.db.body(id)? {
         Some(b) => b,
         None => {
             let b = graph::body(st, &summary.account_id, id).await?;
@@ -195,6 +195,14 @@ async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
             b
         }
     };
+    // Bodies cached before Tern read headers: fetch the unsubscribe headers once.
+    if !body.headers_checked {
+        // Bounded so opening cached mail stays instant offline; a miss is retried on the next open.
+        if let Ok(Ok(u)) = tokio::time::timeout(std::time::Duration::from_millis(1500), graph::unsubscribe_info(st, &summary.account_id, id)).await {
+            let _ = st.db.set_unsubscribe(id, &u);
+            body.unsubscribe = u;
+        }
+    }
     Ok(MessageFull {
         cc: st.db.cc_of(id)?,
         web_link: st.db.web_link(id)?,
@@ -204,6 +212,7 @@ async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
         body_html: body.html,
         body_text: body.text,
         attachments: body.attachments,
+        unsubscribe: body.unsubscribe,
     })
 }
 
@@ -342,6 +351,12 @@ pub async fn message_send(st: St<'_>, message: OutgoingMessage) -> R<()> {
     if !is_reply && message.to.is_empty() && message.cc.is_empty() && message.bcc.is_empty() {
         return Err("Add at least one recipient".into());
     }
+    if let Some(at) = &message.send_at {
+        let t = chrono::DateTime::parse_from_rfc3339(at).map_err(|_| "Invalid send time".to_string())?;
+        if t.with_timezone(&chrono::Utc) < chrono::Utc::now() + chrono::Duration::minutes(1) {
+            return Err("The send time must be in the future".into());
+        }
+    }
     let r = if message.mode == "new" { graph::send_new(&st, &message).await } else { graph::send_response(&st, &message).await };
     r.map_err(|e| format!("{e:#}"))?;
     let st2 = st.inner().clone();
@@ -419,7 +434,90 @@ pub fn messages_due(st: St, limit: Option<i64>) -> R<Vec<MessageSummary>> {
     st.db.due(limit.unwrap_or(20)).map_err(err)
 }
 
+// ---------------- snooze ----------------
+
+/// Snoozes (or with `until` = None, wakes) messages. Snoozed mail is marked read and hidden from mailbox views;
+/// when it wakes it is marked unread again and a notification is shown.
+#[tauri::command]
+pub async fn messages_snooze(app: AppHandle, st: St<'_>, ids: Vec<String>, until: Option<String>) -> R<()> {
+    match until {
+        Some(u) => {
+            let t = chrono::DateTime::parse_from_rfc3339(&u).map_err(|_| "Invalid snooze time".to_string())?;
+            let utc = t.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            st.db.snooze(&ids, &utc).map_err(err)?;
+            let _ = messages_set_read(app.clone(), st.clone(), ids, true).await;
+        }
+        None => {
+            st.db.unsnooze(&ids).map_err(err)?;
+            for id in &ids {
+                if let Ok(acc) = account_of(&st, id) {
+                    changed(&app, &acc);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn snoozed_count(st: St) -> R<i64> {
+    st.db.snoozed_count().map_err(err)
+}
+
+/// RFC 8058 one-click unsubscribe: POSTs to the https link from the message's own headers (never a URL from the UI).
+#[tauri::command]
+pub async fn unsubscribe_one_click(st: St<'_>, message_id: String) -> R<()> {
+    let u = st
+        .db
+        .body(&message_id)
+        .map_err(err)?
+        .and_then(|b| b.unsubscribe)
+        .filter(|u| u.one_click)
+        .and_then(|u| u.url)
+        .filter(|u| u.starts_with("https://"))
+        .ok_or_else(|| "This sender doesn't support one-click unsubscribe".to_string())?;
+    let resp = st
+        .http
+        .post(&u)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("List-Unsubscribe=One-Click")
+        .send()
+        .await
+        .map_err(|e| format!("Unsubscribe failed: {e}"))?;
+    if !resp.status().is_success() && !resp.status().is_redirection() {
+        return Err(format!("The sender's server answered {}", resp.status()));
+    }
+    Ok(())
+}
+
 // ---------------- calendar ----------------
+
+#[tauri::command]
+pub fn event_note_get(st: St, event_id: String) -> R<Option<String>> {
+    st.db.event_note(&event_id).map_err(err)
+}
+
+#[tauri::command]
+pub fn event_note_set(st: St, event_id: String, text: String) -> R<()> {
+    st.db.set_event_note(&event_id, &text).map_err(err)
+}
+
+#[tauri::command]
+pub fn event_notes_index(st: St) -> R<Vec<String>> {
+    st.db.event_ids_with_notes().map_err(err)
+}
+
+/// Per-person free/busy for the scheduling assistant (one digit per `interval` minutes from `from`).
+#[tauri::command]
+pub async fn calendar_availability(st: St<'_>, account_id: String, emails: Vec<String>, from: String, to: String, interval: Option<i64>) -> R<Vec<Availability>> {
+    let emails: Vec<String> = emails.into_iter().filter(|e| e.contains('@')).take(20).collect();
+    if emails.is_empty() {
+        return Ok(vec![]);
+    }
+    graph::get_schedule_detailed(&st, &account_id, &calendar::local_tz(), &emails, &from, &to, interval.unwrap_or(30).clamp(5, 60))
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
 
 #[tauri::command]
 pub fn calendar_events(st: St, from: String, to: String, account_id: Option<String>) -> R<Vec<CalEvent>> {

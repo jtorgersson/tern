@@ -4,7 +4,7 @@ import type { Backend, Effort } from "./backend";
 import { settings } from "./config";
 import { AiError, friendlyError, isAbort } from "./errors";
 import { emailBlock, nowLine, sentBlock, summaryBlock, threadBlock } from "./format";
-import { BRIEFING_SYSTEM, DRAFT_SYSTEM, PREP_SYSTEM, REWRITE_SYSTEM, SUMMARY_SYSTEM, aboutMeBlock } from "./prompts";
+import { BRIEFING_SYSTEM, COACH_SYSTEM, DRAFT_SYSTEM, FOLLOWUP_SYSTEM, PREP_SYSTEM, REWRITE_SYSTEM, SUMMARY_SYSTEM, aboutMeBlock } from "./prompts";
 import { backend } from "./providers";
 
 async function* run(
@@ -67,6 +67,21 @@ export function prepMeeting(ev: CalEvent, related: MessageFull[], signal?: Abort
   const mail = related.length ? related.map((m) => emailBlock(m, 3000)).join("\n\n") : "(no related emails found)";
   const user = aboutMeBlock(settings().ai.aboutMe) + `Now: ${nowLine()}\n\n${event}\n\nRelated emails (newest first):\n\n${mail}`;
   return run("main", PREP_SYSTEM, user, "low", 2500, signal);
+}
+
+/** Time-coach advice from computed calendar statistics (no raw events leave the app beyond these numbers and names). */
+export function coachInsights(stats: unknown, signal?: AbortSignal): AsyncGenerator<string> {
+  const user = aboutMeBlock(settings().ai.aboutMe) + `Now: ${nowLine()}\n\n<stats>\n${JSON.stringify(stats, null, 1)}\n</stats>`;
+  return run("main", COACH_SYSTEM, user, "low", 2000, signal);
+}
+
+/** Follow-up email body from the user's meeting notes. */
+export function followUpFromNotes(ev: CalEvent, notes: string, signal?: AbortSignal): AsyncGenerator<string> {
+  const people = ev.attendees.map((a) => a.addr.name || a.addr.email).join(", ");
+  const user =
+    aboutMeBlock(settings().ai.aboutMe) +
+    `Meeting: ${ev.subject}\nWhen: ${ev.start} – ${ev.end}\nAttendees: ${people || "(none)"}\n\n<notes>\n${notes}\n</notes>`;
+  return run("main", FOLLOWUP_SYSTEM, user, "low", 3000, signal);
 }
 
 export function rewrite(text: string, instruction: string, signal?: AbortSignal): AsyncGenerator<string> {

@@ -136,3 +136,55 @@ export function word(key: "today" | "tomorrow" | "yesterday" | "week" | "allDay"
       return sv ? "nu" : "now";
   }
 }
+
+// ---------- time zones ----------
+
+/** "15:05" of `d` as seen in IANA zone `tz` (24-hour). Falls back to local on an unknown zone. */
+export function hhmmIn(d: Date | string, tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date(d));
+    const h = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const m = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return `${h === "24" ? "00" : h}:${m}`;
+  } catch {
+    return hhmm(d);
+  }
+}
+
+/** Day offset of `tz` relative to local for the instant `d` (-1, 0, +1). */
+export function dayShiftIn(d: Date | string, tz: string): number {
+  try {
+    const x = date(d);
+    const f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+    const there = f.format(x);
+    const here = isoDate(x);
+    return there === here ? 0 : there > here ? 1 : -1;
+  } catch {
+    return 0;
+  }
+}
+
+/** Short label for a zone: "NYC", "LON"… from the city part, or the GMT offset. */
+export function tzLabel(tz: string): string {
+  try {
+    const name = new Intl.DateTimeFormat("en-GB", { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value;
+    if (name && !/^GMT[+-]?\d*$/.test(name) && name.length <= 5) return name;
+    const city = tz.split("/").pop()?.replace(/_/g, " ") ?? tz;
+    return city.length <= 9 ? city : city.slice(0, 3).toUpperCase();
+  } catch {
+    return tz;
+  }
+}
+
+/** All IANA zones the runtime knows (falls back to a short list). */
+export function allTimeZones(): string[] {
+  try {
+    const f = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+    if (f) return f("timeZone");
+  } catch {}
+  return [
+    "Europe/Stockholm", "Europe/London", "Europe/Berlin", "Europe/Helsinki", "America/New_York", "America/Chicago",
+    "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore",
+    "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland", "UTC",
+  ];
+}

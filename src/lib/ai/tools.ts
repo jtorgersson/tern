@@ -384,6 +384,20 @@ export const TOOLS = [
     },
   }),
   def({
+    name: "snooze_messages",
+    description: "Snooze messages: hide them from the inbox until a local date-time, when they come back unread with a notification. Use for 'remind me about this Monday', 'deal with these after the board meeting'.",
+    schema: z.object({ ids: Ids, until: LocalIso.describe("When they should come back, local ISO") }),
+    approval: "safe",
+    label: (i) => `Snoozing ${n(i.ids)} until ${i.until.slice(0, 16).replace("T", " ")}`,
+    preview: (i, ctx) => `Snooze until ${i.until.slice(0, 16).replace("T", " ")}:\n${describeIds(i.ids, ctx)}`,
+    async run(i) {
+      const at = new Date(sec(i.until));
+      if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() + 60_000) throw new Error("until must be in the future");
+      await api.snooze(i.ids, at.toISOString());
+      return `Snoozed ${n(i.ids)}.`;
+    },
+  }),
+  def({
     name: "open_message",
     description: "Open a message in the reader pane.",
     schema: z.object({ id: z.string() }),

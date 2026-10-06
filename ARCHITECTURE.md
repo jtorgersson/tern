@@ -30,7 +30,7 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 
 ## Storage
 * Data: `~/.local/share/tern/tern.db` (SQLite, WAL). Tables: accounts, folders, messages, bodies,
-  annotations, contacts, sync_state, events, calendars, `messages_fts` (FTS5 over subject/from/preview/body text).
+  annotations, contacts, sync_state, events, calendars, snoozes, event_notes, `messages_fts` (FTS5 over subject/from/preview/body text).
 * Settings: `~/.config/tern/settings.json`.
 * Secrets (gnome-keyring, service `tern`): `ms:<accountId>` refresh token, `ai:<providerId>` API keys.
 
@@ -114,3 +114,19 @@ drag to another day) and `AgendaList`. State in `state/calendar.svelte.ts`: `vie
 everything loaded this session and `visible` applies the account filter and hidden calendars. `EventComposer` handles
 create and edit (occurrence or series) including recurrence presets (`presetRecurrence`), and `util/quickadd.ts` parses
 natural-language input (tests: `bun test src`).
+
+## Mail extras
+* Snooze: `snoozes(message_id, until UTC)`. `Db::list` hides snoozed rows from every view except Search and
+  `{kind:"snoozed"}`. Snoozing marks read; `sync::start_snooze_waker` (20 s loop) marks them unread again, emits
+  `mail://changed` + `snooze://woke` and shows a notification.
+* Send later: `OutgoingMessage.sendAt` (UTC) becomes `singleValueExtendedProperties` `SystemTime 0x3FEF`
+  (PidTagDeferredSendTime) on `sendMail` or on the reply draft before `/send`; Exchange holds it in the Outbox.
+* Unsubscribe: `internetMessageHeaders` are read with the body (or once on open for older cached bodies) and
+  `List-Unsubscribe` / `List-Unsubscribe-Post` parsed into `bodies.unsubscribe_json`. One-click POSTs only to the URL
+  stored from the headers, never to one supplied by the UI.
+
+## Calendar extras
+* `event_notes(event_id, text)` are local only. Insights are computed client-side in `util/insights.ts` (tested) from
+  cached events; the view's period is 12 weeks so `ensurePeriod` downloads the history it needs.
+* Scheduling assistant: `calendar_availability` returns per-person getSchedule views (30-min slots); personal accounts
+  get an explanatory message.

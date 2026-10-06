@@ -45,7 +45,9 @@ const WINDOW_AHEAD_DAYS = 45;
 /** Months fetched on demand are re-fetched when older than this. */
 const COVERAGE_TTL = 10 * 60_000;
 const VIEW_KEY = "tern.calView";
-const VIEWS: CalView[] = ["day", "week", "month", "agenda"];
+const VIEWS: CalView[] = ["day", "week", "month", "agenda", "insights"];
+/** Weeks covered by the Insights view (ending with the anchor week). */
+export const INSIGHT_WEEKS = 12;
 
 export interface Period {
   from: Date;
@@ -87,6 +89,8 @@ class CalendarState {
   searchFocusTick = $state(0);
   /** Keyboard time cursor (day/week views). */
   cursor = $state<Cursor | null>(null);
+  /** Event ids that have local meeting notes. */
+  notedIds = $state<Set<string>>(new Set());
 
   /** Invitation details cached per message id. */
   invites = $state<Record<string, InviteInfo | null>>({});
@@ -137,6 +141,10 @@ class CalendarState {
       }
       case "agenda":
         return { from: a, to: addDays(a, 14) };
+      case "insights": {
+        const last = startOfWeek(a);
+        return { from: addDays(last, -7 * (INSIGHT_WEEKS - 1)), to: addDays(last, 7) };
+      }
     }
   });
 
@@ -151,6 +159,8 @@ class CalendarState {
         return monthGrid(this.anchor);
       case "agenda":
         return Array.from({ length: 14 }, (_, i) => addDays(startOfDay(this.anchor), i));
+      case "insights":
+        return [];
     }
   });
 
@@ -172,6 +182,8 @@ class CalendarState {
         const { from, to } = this.period;
         return `${dayMonth(from)} – ${dayMonthYear(addDays(to, -1))}`;
       }
+      case "insights":
+        return "Insights";
     }
   });
 
@@ -287,6 +299,9 @@ class CalendarState {
       case "agenda":
         this.anchor = addDays(a, 14 * delta);
         break;
+      case "insights":
+        this.anchor = addDays(a, 7 * delta);
+        break;
     }
     this.ensurePeriod();
   }
@@ -319,6 +334,7 @@ class CalendarState {
       const from = toLocalIso(new Date(Math.min(w.from.getTime(), this.period.from.getTime())));
       const to = toLocalIso(new Date(Math.max(w.to.getTime(), this.period.to.getTime())));
       const [list, cals] = await Promise.all([api.calendarEvents(from, to, null), this.calendars.length ? null : api.calendars(null)]);
+      if (!this.loadedOnce) this.loadNotesIndex();
       if (seq !== this.seq) return;
       this.merge(list, from, to);
       if (cals) this.calendars = cals;
@@ -498,6 +514,75 @@ class CalendarState {
     }
   }
 
+  // ---------- notes ----------
+  async loadNotesIndex() {
+    try {
+      this.notedIds = new Set(await api.eventNotesIndex());
+    } catch {}
+  }
+
+  async saveNote(eventId: string, text: string) {
+    await api.eventNoteSet(eventId, text);
+    const s = new Set(this.notedIds);
+    if (text.trim()) s.add(eventId);
+    else s.delete(eventId);
+    this.notedIds = s;
+  }
+
+  // ---------- rules ----------
+  /** Time can only be changed by the organizer (or on an event without attendees) in a writable calendar. */
+  canChangeTime(ev: CalEvent): boolean {
+    if (ev.isCancelled) return false;
+    if (!(this.calendarById.get(ev.calendarId)?.canEdit ?? true)) return false;
+    return ev.response === "organizer" || ev.attendees.length === 0;
+  }
+
+  /** Speedy meetings: shorten a default length by the configured minutes (only for 30 min or longer). */
+  speedy(durMins: number): number {
+    const cut = this.settings?.speedyMeetings ?? 0;
+    return cut > 0 && durMins >= 30 ? durMins - cut : durMins;
+  }
+
+  /** Default length for a new event, with speedy meetings applied. */
+  defaultDuration(): number {
+    return this.speedy(this.settings?.defaultDurationMins ?? 30);
+  }
+
+  /** One-click reschedule. Keeps the length; "later" = +1 hour, "tomorrow" = +1 day, "nextWeek" = +7 days. */
+  async reschedule(ev: CalEvent, by: "later" | "tomorrow" | "nextWeek" | "prevDay") {
+    if (!this.canChangeTime(ev)) {
+      toasts.show("Only the organizer can move this meeting — propose a new time instead", { kind: "error", timeout: 5000 });
+      return;
+    }
+    if (by === "later" && ev.isAllDay) return;
+    const ms = by === "later" ? 3_600_000 : by === "tomorrow" ? 86_400_000 : by === "nextWeek" ? 7 * 86_400_000 : -86_400_000;
+    // Day moves keep the wall-clock time across DST changes.
+    const shift = (iso: string) => {
+      const d = new Date(iso);
+      if (by === "later") return toLocalIso(new Date(d.getTime() + ms));
+      return toLocalIso(addDays(d, by === "tomorrow" ? 1 : by === "nextWeek" ? 7 : -1));
+    };
+    const start = shift(ev.start);
+    const end = shift(ev.end);
+    await this.move(ev, start, end).catch(() => {});
+    if (by !== "later" && this.view !== "insights") this.goto(new Date(start));
+  }
+
+  /** Join the meeting that is live or starts within 15 minutes. */
+  joinNext(): boolean {
+    const nowIso = toLocalIso(this.now);
+    const soon = toLocalIso(new Date(this.now.getTime() + 15 * 60_000));
+    const ev = this.todayEvents.find((e) => !e.isAllDay && isBusy(e) && e.joinUrl && e.start <= soon && e.end > nowIso);
+    if (ev?.joinUrl) {
+      import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(ev.joinUrl!));
+      toasts.show(`Joining “${ev.subject || "(no title)"}”`, { kind: "success", timeout: 2500 });
+      return true;
+    }
+    const next = this.nextUp;
+    toasts.show(next ? `Next meeting “${next.subject}” starts at ${hhmm(next.start)}${next.joinUrl ? "" : " (no online link)"}` : "No more meetings today", { timeout: 4000 });
+    return false;
+  }
+
   /** One click: private ↔ normal. */
   async togglePrivate(ev: CalEvent) {
     const next = ev.sensitivity === "private" ? "normal" : "private";
@@ -607,7 +692,7 @@ class CalendarState {
       const base = Math.round((this.now.getHours() * 60 + this.now.getMinutes()) / 30) * 30;
       const ws = this.settings?.workStart ?? "09:00";
       const [wh, wm] = ws.split(":").map(Number);
-      this.cursor = { col: todayIdx >= 0 ? todayIdx : 0, mins: todayIdx >= 0 ? Math.min(1410, base) : (wh || 9) * 60 + (wm || 0), len: this.settings?.defaultDurationMins ?? 30 };
+      this.cursor = { col: todayIdx >= 0 ? todayIdx : 0, mins: todayIdx >= 0 ? Math.min(1410, base) : (wh || 9) * 60 + (wm || 0), len: this.defaultDuration() };
       return;
     }
     const c = { ...this.cursor };
@@ -675,7 +760,7 @@ class CalendarState {
 
   /** Opens the composer prefilled for `day` at `minutes` (from a click/drag on the grid). */
   composeAt(day: Date, minutes: number | null, durationMins?: number) {
-    const dur = durationMins ?? this.settings?.defaultDurationMins ?? 30;
+    const dur = durationMins ?? this.defaultDuration();
     if (minutes == null) {
       this.openComposer({ start: toLocalIso(day), end: toLocalIso(addDays(day, 1)), isAllDay: true });
       return;
@@ -738,7 +823,7 @@ class CalendarState {
 
   /** Quick add: parse free text and open the composer prefilled (so the user can still adjust). */
   quickAdd(text: string, accountId?: string | null): boolean {
-    const q = parseQuickAdd(text, this.now, this.settings?.defaultDurationMins ?? 30);
+    const q = parseQuickAdd(text, this.now, this.defaultDuration());
     if (!q) return false;
     this.openComposer({
       accountId: accountId ?? app.accountFilter ?? undefined,

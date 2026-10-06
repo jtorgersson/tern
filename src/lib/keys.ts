@@ -14,7 +14,11 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "Enter / o", label: "Open message", group: "Navigate" },
   { keys: "g t", label: "Go to Today", group: "Navigate" },
   { keys: "g c", label: "Go to Calendar", group: "Navigate" },
-  { keys: "d / w / m / a", label: "Calendar: day / week / month / agenda", group: "Navigate" },
+  { keys: "d / w / m / a / i", label: "Calendar: day / week / month / agenda / insights", group: "Navigate" },
+  { keys: "[ / ]", label: "Calendar: move selected event a day back / forward", group: "Act" },
+  { keys: "z", label: "Snooze", group: "Act" },
+  { keys: "g z", label: "Go to Snoozed", group: "Navigate" },
+  { keys: "g j", label: "Join the current / next meeting", group: "App" },
   { keys: "h / l", label: "Calendar: previous / next period", group: "Navigate" },
   { keys: "t", label: "Calendar: today", group: "Navigate" },
   { keys: "n", label: "Calendar: new event", group: "Compose" },
@@ -84,7 +88,8 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Escape") {
-    if (app.paletteOpen) app.paletteOpen = false;
+    if (app.snoozeTarget) app.snoozeTarget = null;
+    else if (app.paletteOpen) app.paletteOpen = false;
     else if (app.cheatsheetOpen) app.cheatsheetOpen = false;
     else if (app.settingsOpen) app.settingsOpen = false;
     else if (composer.open && !composer.minimized && (!isTyping(e) || (e.target as HTMLElement).closest("[data-composer]"))) {
@@ -105,8 +110,10 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
 
-  if (isTyping(e) || mod || e.altKey) return;
-  if (app.paletteOpen || app.settingsOpen || !app.hasAccounts) return;
+  // AltGr (Ctrl+Alt on Windows, Option on macOS) is how Nordic layouts type [ and ]: let those through.
+  const altGrBracket = (e.key === "[" || e.key === "]") && (e.getModifierState?.("AltGraph") || (e.ctrlKey && e.altKey) || (e.altKey && !e.ctrlKey && !e.metaKey));
+  if (isTyping(e) || ((mod || e.altKey) && !altGrBracket)) return;
+  if (app.paletteOpen || app.settingsOpen || app.snoozeTarget || !app.hasAccounts) return;
 
   if (pendingG) {
     pendingG = false;
@@ -118,6 +125,8 @@ export function handleKey(e: KeyboardEvent) {
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
       t: () => app.setView({ kind: "today" }),
       c: () => app.setView({ kind: "calendar" }),
+      z: () => app.setView({ kind: "snoozed" }),
+      j: () => calendar.joinNext(),
       x: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),
       f: () => app.setView({ kind: "flagged" }),
       r: () => app.setView({ kind: "category", category: "needs_reply" }),
@@ -152,6 +161,9 @@ export function handleKey(e: KeyboardEvent) {
       w: () => calendar.setView("week"),
       m: () => calendar.setView("month"),
       a: () => calendar.setView("agenda"),
+      i: () => calendar.setView("insights"),
+      "]": () => sel && calendar.reschedule(sel, "tomorrow"),
+      "[": () => sel && calendar.reschedule(sel, "prevDay"),
       h: () => calendar.prev(),
       ArrowLeft: () => (grid && calendar.cursor ? calendar.moveCursor(-1, 0) : calendar.prev()),
       l: () => calendar.next(),
@@ -185,6 +197,7 @@ export function handleKey(e: KeyboardEvent) {
     Delete: () => app.trash(),
     s: () => app.toggleFlag(),
     u: () => app.toggleRead(),
+    z: () => app.openSnooze(),
     U: () => app.toggleUnreadOnly(),
     x: () => app.selectedId && app.toggleCheck(app.selectedId),
     c: () => composer.compose(),

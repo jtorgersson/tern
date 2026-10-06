@@ -42,6 +42,7 @@ pub fn run() {
             theme::watch(app.handle().clone());
             sync::start(app.handle().clone());
             calendar::start_reminders(app.handle().clone());
+            sync::start_snooze_waker(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -82,6 +83,13 @@ pub fn run() {
             commands::calendar_free_slots,
             commands::calendar_list,
             commands::calendar_search,
+            commands::messages_snooze,
+            commands::snoozed_count,
+            commands::unsubscribe_one_click,
+            commands::event_note_get,
+            commands::event_note_set,
+            commands::event_notes_index,
+            commands::calendar_availability,
             commands::calendar_fetch_range,
             commands::event_get,
             commands::event_update,

@@ -27,7 +27,54 @@
     Paperclip,
     Download,
     LoaderCircle,
+    AlarmClock,
+    MailX,
   } from "@lucide/svelte";
+  import { parseMailto } from "$lib/util/mailto";
+
+  // ---- unsubscribe ----
+  let unsubBusy = $state(false);
+  let unsubDone = $state<string | null>(null);
+  $effect(() => {
+    void app.open?.id;
+    unsubDone = null;
+  });
+  async function unsubscribe(msg: MessageFull) {
+    const u = msg.unsubscribe;
+    if (!u) return;
+    unsubBusy = true;
+    try {
+      if (u.oneClick) {
+        await api.unsubscribeOneClick(msg.id);
+        unsubDone = msg.id;
+        offerCleanup(msg, `Unsubscribed from ${displayName(msg.from)}`);
+      } else if (u.url) {
+        await openUrl(u.url);
+        offerCleanup(msg, "Opened the sender's unsubscribe page");
+      } else if (u.mailto) {
+        composer.compose({ ...parseMailto(u.mailto), accountId: msg.accountId });
+      }
+    } catch (e) {
+      toasts.error(errMsg(e));
+    } finally {
+      unsubBusy = false;
+    }
+  }
+  /** After unsubscribing, offer to archive everything else from that sender. */
+  function offerCleanup(msg: MessageFull, text: string) {
+    toasts.show(text, {
+      kind: "success",
+      timeout: 9000,
+      action: {
+        label: "Archive all from sender",
+        run: async () => {
+          const list = await api.messages({ view: { kind: "unified", wellKnown: "inbox" }, accountId: msg.accountId, limit: 500 });
+          const ids = list.filter((x) => x.from.email.toLowerCase() === msg.from.email.toLowerCase()).map((x) => x.id);
+          if (ids.length) app.archive(ids);
+        },
+      },
+    });
+  }
 
   const m = $derived(app.open);
   const acct = $derived(m ? app.accountById.get(m.accountId) : undefined);
@@ -86,6 +133,11 @@
           <Star size={16} fill={m.isFlagged ? "currentColor" : "none"} />
         </button>
         <button class="icon-btn" title="Mark unread (u)" onclick={() => app.setRead([m.id], false)}><MailOpen size={16} /></button>
+        {#if m.snoozedUntil}
+          <button class="icon-btn on" title="Snoozed — click to bring it back now" onclick={() => app.unsnooze([m.id])}><AlarmClock size={16} /></button>
+        {:else}
+          <button class="icon-btn" title="Snooze (z)" onclick={() => app.openSnooze([m.id])}><AlarmClock size={16} /></button>
+        {/if}
       </div>
       <div class="group">
         <button class="icon-btn" title="Reply (r)" onclick={() => composer.reply(m, "reply")}><Reply size={16} /></button>
@@ -110,6 +162,19 @@
 
           {#if m.meetingType && m.meetingType !== "none"}
             <InviteCard message={m} />
+          {/if}
+          {#if m.unsubscribe && unsubDone !== m.id}
+            <div class="unsub">
+              <MailX size={14} />
+              <span>Mailing list from <b>{displayName(m.from)}</b></span>
+              <span class="spacer"></span>
+              <button class="btn sm" onclick={() => unsubscribe(m)} disabled={unsubBusy}>
+                {#if unsubBusy}<LoaderCircle size={12} class="spin" />{/if}
+                {m.unsubscribe.oneClick ? "Unsubscribe" : m.unsubscribe.url ? "Unsubscribe…" : "Unsubscribe by email"}
+              </button>
+            </div>
+          {:else if unsubDone === m.id}
+            <div class="unsub done"><MailX size={14} /> Unsubscribed. You shouldn't get more mail from this list.</div>
           {/if}
           <TldrCard {thread} message={m} />
 
@@ -386,5 +451,29 @@
   }
   .ph-keys kbd {
     margin-right: 3px;
+  }
+  .unsub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 8px 10px 8px 12px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    color: var(--fg-dim);
+    background: color-mix(in oklab, var(--magenta) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--magenta) 22%, var(--line));
+  }
+  .unsub b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .unsub.done {
+    color: var(--green);
+    background: color-mix(in oklab, var(--green) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--green) 25%, var(--line));
+  }
+  .unsub .spacer {
+    flex: 1;
   }
 </style>

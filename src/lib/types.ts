@@ -82,6 +82,23 @@ export interface MessageSummary {
   /** Set when the message is a meeting request/response (Graph eventMessage). */
   meetingType: MeetingType | null;
   ai: Annotation | null;
+  /** UTC ISO; set while the message is snoozed. */
+  snoozedUntil: string | null;
+}
+
+/** List-Unsubscribe from the message headers. */
+export interface Unsubscribe {
+  url: string | null;
+  mailto: string | null;
+  /** RFC 8058: one POST unsubscribes, no web page. */
+  oneClick: boolean;
+}
+
+/** getSchedule result for one person. `view`: one digit per interval — 0 free, 1 tentative, 2 busy, 3 away, 4 elsewhere. */
+export interface Availability {
+  email: string;
+  view: string | null;
+  error: string | null;
 }
 
 // ---- Calendar ----
@@ -267,6 +284,7 @@ export interface MessageFull extends MessageSummary {
   bodyText: string;
   attachments: Attachment[];
   webLink: string | null;
+  unsubscribe: Unsubscribe | null;
 }
 
 export type MessageView =
@@ -276,6 +294,7 @@ export type MessageView =
   | { kind: "unified"; wellKnown: WellKnownFolder } // across all accounts
   | { kind: "flagged" }
   | { kind: "category"; category: AiCategory } // inbox only, across accounts
+  | { kind: "snoozed" } // snoozed mail, any folder
   | { kind: "search"; query: string };
 
 export interface MessageQuery {
@@ -300,6 +319,8 @@ export interface OutgoingMessage {
   bcc: Addr[];
   subject: string;
   bodyHtml: string;
+  /** Send later: UTC ISO ("…Z"); Exchange delivers it then, even with Tern closed. */
+  sendAt?: string | null;
 }
 
 export interface Contact {
@@ -367,10 +388,14 @@ export interface Settings {
     showWeekends: boolean;
     /** Calendar ids the user switched off. */
     hiddenCalendars: string[];
+    /** Second clock in the week/day grid and event details (IANA zone), or null. */
+    secondaryTimeZone: string | null;
+    /** End new meetings early: 0 = off, 5 or 10 minutes (Speedy meetings). */
+    speedyMeetings: number;
   };
 }
 
-export type CalView = "day" | "week" | "month" | "agenda";
+export type CalView = "day" | "week" | "month" | "agenda" | "insights";
 
 export interface Theme {
   name: string;

@@ -11,6 +11,7 @@
   import TimeGrid from "./TimeGrid.svelte";
   import MonthGrid from "./MonthGrid.svelte";
   import AgendaList from "./AgendaList.svelte";
+  import Insights from "./Insights.svelte";
   import { ChevronLeft, ChevronRight, Plus, RefreshCw, LoaderCircle, Sparkles, Zap, CalendarCheck, Check, Eye, EyeOff, PanelLeftClose, PanelLeftOpen, Search, X, Share2, Shield } from "@lucide/svelte";
   import { hm } from "$lib/util/cal";
   import { tick } from "svelte";
@@ -20,6 +21,7 @@
     { id: "week", label: "Week", key: "w" },
     { id: "month", label: "Month", key: "m" },
     { id: "agenda", label: "Agenda", key: "a" },
+    { id: "insights", label: "Insights", key: "i" },
   ];
 
   $effect(() => {
@@ -33,7 +35,7 @@
 
   let quick = $state("");
   let quickEl: HTMLInputElement | undefined = $state();
-  const parsed = $derived(quick.trim() ? parseQuickAdd(quick, calendar.now, app.settings?.calendar.defaultDurationMins ?? 30) : null);
+  const parsed = $derived(quick.trim() ? parseQuickAdd(quick, calendar.now, calendar.defaultDuration()) : null);
   const preview = $derived.by(() => {
     if (!parsed) return "";
     const bits = [whenLabel({ start: isoOf(parsed.start), end: isoOf(parsed.end), isAllDay: parsed.allDay })];
@@ -270,7 +272,9 @@
     {/if}
 
     <div class="view">
-      {#if calendar.view === "month"}
+      {#if calendar.view === "insights"}
+        <Insights />
+      {:else if calendar.view === "month"}
         <MonthGrid />
       {:else if calendar.view === "agenda"}
         <AgendaList />

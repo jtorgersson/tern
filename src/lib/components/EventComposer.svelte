@@ -12,6 +12,7 @@
   import { hueColor } from "$lib/theme";
   import { errMsg } from "$lib/util/misc";
   import AddressInput from "./AddressInput.svelte";
+  import AvailabilityStrip from "./AvailabilityStrip.svelte";
   import { X, Video, MapPin, Sparkles, LoaderCircle, Calendar as CalIcon, Clock, AlignLeft, Repeat, Bell, Lock, Users, Zap, Trash2 } from "@lucide/svelte";
   import { tick, untrack } from "svelte";
 
@@ -91,7 +92,7 @@
     const writable = calendar.writableCalendars(accountId);
     calendarId = d.calendarId && writable.some((c) => c.id === d.calendarId) ? d.calendarId : (writable.find((c) => c.isDefault)?.id ?? "");
     subject = d.subject ?? "";
-    const dur = cal?.defaultDurationMins ?? 30;
+    const dur = calendar.defaultDuration();
     const s = d.start ? new Date(d.start) : roundUpHalfHour(new Date());
     const e = d.end ? new Date(d.end) : new Date(s.getTime() + dur * 60_000);
     date = dayKey(s);
@@ -174,7 +175,7 @@
   /** Title quick-parse: "Lunch tomorrow 12" typed in the title fills in the time (new events only). */
   const titleHint = $derived.by(() => {
     if (editing || !subject.trim()) return null;
-    const q = parseQuickAdd(subject, calendar.now, app.settings?.calendar.defaultDurationMins ?? 30);
+    const q = parseQuickAdd(subject, calendar.now, calendar.defaultDuration());
     if (!q || (!q.matched.date && !q.matched.time)) return null;
     if (q.subject === subject.trim()) return null;
     return q;
@@ -446,6 +447,28 @@
         </label>
         <span class="loc"><MapPin size={13} /><input class="plain" bind:value={location} placeholder="Location" /></span>
       </div>
+
+      {#if !allDay && hasGuests && !multiDay}
+        {@const acct = app.accountById.get(accountId)}
+        {#if acct}
+          <AvailabilityStrip
+            {accountId}
+            me={{ name: acct.displayName, email: acct.email }}
+            people={[...attendees, ...optional]}
+            {date}
+            start={startT}
+            end={endT}
+            workStart={app.settings?.calendar.workStart ?? "09:00"}
+            workEnd={app.settings?.calendar.workEnd ?? "17:00"}
+            onpick={(t) => {
+              const dur = durationMins;
+              startT = t;
+              const e = new Date(new Date(`${date}T${t}:00`).getTime() + dur * 60_000);
+              endT = hm24(e);
+              endDate = dayKey(e);
+            }} />
+        {/if}
+      {/if}
 
       {#if !allDay}
         <div class="find">

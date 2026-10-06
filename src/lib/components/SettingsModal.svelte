@@ -1,5 +1,6 @@
 <script lang="ts">
   import { calendar } from "$lib/state/calendar.svelte";
+  import { allTimeZones } from "$lib/util/fmt";
   import { app } from "$lib/state/app.svelte";
   import { toasts } from "$lib/state/toasts.svelte";
   import { api } from "$lib/api";
@@ -253,6 +254,21 @@
                 <button class:on={(s.calendar?.reminderMinutes ?? 5) === n} onclick={() => app.patchSettings((st) => (st.calendar.reminderMinutes = n))}>
                   {n === 0 ? "Off" : `${n} min`}
                 </button>
+              {/each}
+            </div>
+          </div>
+          <div class="opt-row">
+            <div><b>Second time zone</b><span class="hint">Shown beside your own in the week grid and in event details</span></div>
+            <select class="field tzsel" value={s.calendar.secondaryTimeZone ?? ""} onchange={(e) => app.patchSettings((st) => (st.calendar.secondaryTimeZone = (e.currentTarget as HTMLSelectElement).value || null))}>
+              <option value="">None</option>
+              {#each allTimeZones() as z (z)}<option value={z}>{z.replace(/_/g, " ")}</option>{/each}
+            </select>
+          </div>
+          <div class="opt-row">
+            <div><b>Speedy meetings</b><span class="hint">New meetings of 30 min or more end early, so there's a break between them</span></div>
+            <div class="seg">
+              {#each [0, 5, 10] as n}
+                <button class:on={(s.calendar.speedyMeetings ?? 0) === n} onclick={() => app.patchSettings((st) => (st.calendar.speedyMeetings = n))}>{n === 0 ? "Off" : `${n} min`}</button>
               {/each}
             </div>
           </div>
@@ -655,6 +671,11 @@
   }
   .err {
     color: var(--red);
+  }
+  .tzsel {
+    width: 230px;
+    height: 32px;
+    font-size: 12.5px;
   }
   .cal-list {
     display: flex;

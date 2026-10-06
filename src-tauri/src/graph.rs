@@ -664,7 +664,7 @@ pub fn html_to_text(html: &str) -> String {
 }
 
 pub async fn body(st: &AppState, account_id: &str, id: &str) -> Result<StoredBody> {
-    let url = format!("/me/messages/{id}?$select=body,bccRecipients,replyTo,hasAttachments");
+    let url = format!("/me/messages/{id}?$select=body,bccRecipients,replyTo,hasAttachments,internetMessageHeaders");
     let resp = send_raw(st, account_id, Method::GET, &url, None, Some("outlook.body-content-type=\"html\"")).await?;
     let v: Value = resp.json().await?;
     let mut html = v.pointer("/body/content").and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -717,7 +717,58 @@ pub async fn body(st: &AppState, account_id: &str, id: &str) -> Result<StoredBod
         bcc: addrs(&v["bccRecipients"]),
         reply_to: addrs(&v["replyTo"]),
         attachments,
+        unsubscribe: parse_unsubscribe(&v["internetMessageHeaders"]),
+        headers_checked: true,
     })
+}
+
+/// Just the unsubscribe headers (for bodies cached before Tern read headers).
+pub async fn unsubscribe_info(st: &AppState, account_id: &str, id: &str) -> Result<Option<Unsubscribe>> {
+    let v = call(st, account_id, Method::GET, &format!("/me/messages/{id}?$select=internetMessageHeaders"), None).await?;
+    Ok(parse_unsubscribe(&v["internetMessageHeaders"]))
+}
+
+/// List-Unsubscribe: `<mailto:…>, <https://…>`; List-Unsubscribe-Post: `List-Unsubscribe=One-Click` (RFC 8058).
+pub fn parse_unsubscribe(headers: &Value) -> Option<Unsubscribe> {
+    let get = |name: &str| -> Option<String> {
+        headers.as_array()?.iter().find(|h| h["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name))).and_then(|h| h["value"].as_str().map(String::from))
+    };
+    let lu = get("List-Unsubscribe")?;
+    let mut out = Unsubscribe::default();
+    // URIs are enclosed in <…> and may themselves contain commas.
+    let parts: Vec<&str> = lu.split('<').skip(1).filter_map(|p| p.split_once('>').map(|(u, _)| u)).collect();
+    for part in parts {
+        let t = part.trim();
+        if t.starts_with("https://") && out.url.is_none() {
+            out.url = Some(t.to_string());
+        } else if t.to_ascii_lowercase().starts_with("mailto:") && out.mailto.is_none() {
+            out.mailto = Some(t.to_string());
+        }
+    }
+    out.one_click = out.url.is_some() && get("List-Unsubscribe-Post").is_some_and(|p| p.to_ascii_lowercase().contains("one-click"));
+    (out.url.is_some() || out.mailto.is_some()).then_some(out)
+}
+
+/// Per-person free/busy (errors kept per person instead of dropped).
+pub async fn get_schedule_detailed(st: &AppState, account_id: &str, tz: &str, emails: &[String], from: &str, to: &str, interval: i64) -> Result<Vec<Availability>> {
+    let body = json!({
+        "schedules": emails,
+        "startTime": { "dateTime": from, "timeZone": tz },
+        "endTime": { "dateTime": to, "timeZone": tz },
+        "availabilityViewInterval": interval
+    });
+    let resp = send_raw(st, account_id, Method::POST, "/me/calendar/getSchedule", Some(&body), Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    Ok(v["value"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|s| Availability {
+            email: s["scheduleId"].as_str().unwrap_or_default().to_string(),
+            view: s["availabilityView"].as_str().filter(|x| !x.is_empty()).map(String::from),
+            error: s.pointer("/error/message").and_then(|m| m.as_str()).map(String::from),
+        })
+        .collect())
 }
 
 pub async fn attachment_bytes(st: &AppState, account_id: &str, message_id: &str, attachment_id: &str) -> Result<Vec<u8>> {
@@ -768,6 +819,10 @@ pub async fn send_new(st: &AppState, m: &OutgoingMessage) -> Result<()> {
         },
         "saveToSentItems": true
     });
+    let mut body = body;
+    if let Some(at) = &m.send_at {
+        body["message"]["singleValueExtendedProperties"] = deferred(at);
+    }
     call(st, &m.account_id, Method::POST, "/me/sendMail", Some(&body)).await?;
     Ok(())
 }
@@ -799,6 +854,9 @@ pub async fn send_response(st: &AppState, m: &OutgoingMessage) -> Result<()> {
     if m.subject.trim().is_empty() {
         patch_body.as_object_mut().unwrap().remove("subject");
     }
+    if let Some(at) = &m.send_at {
+        patch_body["singleValueExtendedProperties"] = deferred(at);
+    }
     let result = async {
         call(st, &m.account_id, Method::PATCH, &format!("/me/messages/{draft_id}"), Some(&patch_body)).await?;
         call(st, &m.account_id, Method::POST, &format!("/me/messages/{draft_id}/send"), None).await?;
@@ -809,6 +867,11 @@ pub async fn send_response(st: &AppState, m: &OutgoingMessage) -> Result<()> {
         let _ = delete(st, &m.account_id, &draft_id).await;
     }
     result
+}
+
+/// PidTagDeferredSendTime: Exchange keeps the message in the Outbox and sends it at `at` (UTC).
+fn deferred(at: &str) -> Value {
+    json!([{ "id": "SystemTime 0x3FEF", "value": at }])
 }
 
 /// Inserts our HTML right after <body ...> of the server-generated draft (which holds the quote).
@@ -825,6 +888,26 @@ fn merge_into_quoted(ours: &str, quoted: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parses_list_unsubscribe() {
+        let h = serde_json::json!([
+            { "name": "List-Unsubscribe", "value": "<mailto:unsub@news.example?subject=stop>, <https://news.example/u/abc>" },
+            { "name": "list-unsubscribe-post", "value": "List-Unsubscribe=One-Click" }
+        ]);
+        let u = super::parse_unsubscribe(&h).unwrap();
+        assert_eq!(u.url.as_deref(), Some("https://news.example/u/abc"));
+        assert_eq!(u.mailto.as_deref(), Some("mailto:unsub@news.example?subject=stop"));
+        assert!(u.one_click);
+        // http (not https) links are ignored; mailto only → not one-click
+        let h = serde_json::json!([{ "name": "List-Unsubscribe", "value": "<http://x.example/u>, <mailto:a@b.c>" }]);
+        let u = super::parse_unsubscribe(&h).unwrap();
+        assert!(u.url.is_none() && !u.one_click);
+        assert!(super::parse_unsubscribe(&serde_json::json!([])).is_none());
+        // commas inside a URL are kept
+        let h = serde_json::json!([{ "name": "List-Unsubscribe", "value": "<https://esp.example/u?l=a,b&t=x>" }]);
+        assert_eq!(super::parse_unsubscribe(&h).unwrap().url.as_deref(), Some("https://esp.example/u?l=a,b&t=x"));
+    }
+
     #[test]
     fn html_to_text_basic() {
         let t = super::html_to_text(

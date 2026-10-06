@@ -18,6 +18,7 @@
     Plus,
     Sun,
     CalendarDays,
+    AlarmClock,
   } from "@lucide/svelte";
   import { today } from "$lib/state/today.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
@@ -132,6 +133,13 @@
             <Star size={15} />
             <span class="name">Flagged</span>
           </button>
+          {#if app.snoozedCount || app.view.kind === "snoozed"}
+            <button class="item" class:active={isActive({ kind: "snoozed" })} onclick={() => app.setView({ kind: "snoozed" })}>
+              <AlarmClock size={15} />
+              <span class="name">Snoozed</span>
+              {#if app.snoozedCount}<span class="count">{app.snoozedCount}</span>{/if}
+            </button>
+          {/if}
         {/if}
       {/each}
     </section>

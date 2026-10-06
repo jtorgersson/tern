@@ -40,7 +40,9 @@ pub fn defaults() -> Value {
             "defaultView": "week",
             "showWeekNumbers": true,
             "showWeekends": true,
-            "hiddenCalendars": []
+            "hiddenCalendars": [],
+            "secondaryTimeZone": null,
+            "speedyMeetings": 0
         }
     })
 }

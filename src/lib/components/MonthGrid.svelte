@@ -51,7 +51,7 @@
     calendar.move(ev, toLocalIso(ns), toLocalIso(ne)).catch(() => {});
   }
   function onDragStart(e: DragEvent, ev: CalEvent) {
-    const editable = !ev.isCancelled && (calendar.calendarById.get(ev.calendarId)?.canEdit ?? true);
+    const editable = calendar.canChangeTime(ev);
     if (!editable) {
       e.preventDefault();
       return;

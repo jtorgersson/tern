@@ -67,6 +67,42 @@ pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account, include
     }
 }
 
+/// Wakes snoozed messages: marks them unread again, refreshes the lists and shows a notification.
+pub fn start_snooze_waker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let st = app.state::<Arc<AppState>>().inner().clone();
+        loop {
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let ids = match st.db.take_due_snoozes(&now) {
+                Ok(ids) if !ids.is_empty() => ids,
+                _ => continue,
+            };
+            let mut woke: Vec<MessageSummary> = Vec::new();
+            for id in &ids {
+                let Ok(Some(m)) = st.db.summary(id) else { continue };
+                let _ = st.db.set_read(std::slice::from_ref(id), false);
+                if let Err(e) = graph::patch(&st, &m.account_id, id, serde_json::json!({ "isRead": false })).await {
+                    log::warn!("snooze wake: could not mark unread: {e:#}");
+                }
+                let _ = app.emit("mail://changed", MailChangedEvent { account_id: m.account_id.clone(), folder_ids: vec![m.folder_id.clone()], new_message_ids: vec![] });
+                woke.push(m);
+            }
+            if woke.is_empty() {
+                continue;
+            }
+            let (title, body) = if woke.len() == 1 {
+                let m = &woke[0];
+                (format!("Back from snooze · {}", if m.from.name.is_empty() { &m.from.email } else { &m.from.name }), m.subject.clone())
+            } else {
+                (format!("{} messages are back from snooze", woke.len()), woke.iter().take(3).map(|m| m.subject.clone()).collect::<Vec<_>>().join("\n"))
+            };
+            let _ = app.notification().builder().title(title).body(body).show();
+            let _ = app.emit("snooze://woke", woke.iter().map(|m| m.id.clone()).collect::<Vec<_>>());
+        }
+    });
+}
+
 /// Downloads bodies of recent messages in the background so opening mail is instant and body search works
 /// without a round trip. A bounded batch per cycle keeps Graph throttling and bandwidth in check.
 const PREFETCH_PER_CYCLE: i64 = 40;

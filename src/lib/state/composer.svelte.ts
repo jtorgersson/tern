@@ -162,7 +162,8 @@ class Composer {
     };
   }
 
-  send() {
+  /** `at` = send later (Exchange delivers it then, even with Tern closed). */
+  send(at: Date | null = null) {
     const d = this.draft;
     if (!d) return;
     if (!d.to.length && !d.cc.length && !d.bcc.length) {
@@ -172,10 +173,18 @@ class Composer {
     const snapshot = $state.snapshot(d) as Draft;
     snapshot.ref = d.ref; // keep reference (not proxied)
     const out = this.build(snapshot);
+    if (at) {
+      if (at.getTime() < Date.now() + 2 * 60_000) {
+        toasts.error("Pick a time at least a few minutes from now");
+        return;
+      }
+      out.sendAt = at.toISOString().replace(/\.\d{3}Z$/, "Z");
+    }
     this.close();
+    const when = at ? `${at.toLocaleDateString("en-CA")} ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : "";
 
     let cancelled = false;
-    const id = toasts.show("Sending…", {
+    const id = toasts.show(at ? `Scheduling for ${when}…` : "Sending…", {
       kind: "progress",
       timeout: 0,
       action: {
@@ -193,7 +202,7 @@ class Composer {
       toasts.update(id, { action: undefined });
       try {
         await api.send(out);
-        toasts.update(id, { kind: "success", text: "Sent", timeout: 2500 });
+        toasts.update(id, { kind: "success", text: at ? `Scheduled — Outlook will send it ${when}` : "Sent", timeout: at ? 5000 : 2500 });
         app.scheduleRefresh();
         if (out.refMessageId && (out.mode === "reply" || out.mode === "replyAll")) {
           import("./today.svelte").then(({ today }) => today.clearReply(out.refMessageId!));

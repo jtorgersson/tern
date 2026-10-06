@@ -12,6 +12,11 @@ AI-native, keyboard-first mail for Omarchy. It's built with Tauri 2, Rust, and S
   - **Meeting prep, automatically:** open any meeting and Tern pulls the related mail from the people in it and streams a short brief — what it's about, what to know, what to prepare, what's still open.
   - **Dates in mail become events:** "next Thursday at 14:00" in an email shows a one-click *Create event* chip; invitations get a real *Propose a new time* (sent to the organizer as a counter-proposal).
   - **Scheduling helpers:** one-click private focus blocks from free gaps, *Share my availability* composes an email with your free slots, a *Next up* pill in the top bar counts down to your next meeting with Join, keyboard time cursor on the week grid (arrows, Enter), event search over everything cached (`/`), and a lock toggle to make any event private.
+  - **Insights:** a calendar view (`i`) with your week against your usual — time in meetings, focus time, back-to-back runs — a 12-week meeting heatmap, when your meetings happen, who you meet most, meeting sizes, and an AI time coach.
+  - **Scheduling assistant:** when you invite people, the composer shows everyone's free/busy for the day (work and school accounts); click a slot to move the meeting there.
+  - **Meeting notes:** private notes on any event, and a one-click follow-up email to the attendees drafted from them.
+  - **Calendar comfort:** second time zone in the week grid, speedy meetings (end 5 or 10 min early), one-click reschedule (+1 h, tomorrow, next week, `[` `]`), and `g j` joins the current or next meeting from anywhere.
+- **Snooze** (`z`): hide mail until later today, tomorrow, the weekend, next week or any time; it comes back unread with a notification. **Send later**: Outlook holds the message and sends it on time even with Tern closed. **Unsubscribe** from mailing lists in one click (RFC 8058), then archive everything else from that sender.
 - **Background bodies:** recent mail bodies are downloaded after each sync, so messages open instantly and full-text search covers bodies (Settings → Sync).
 - **Swedish time conventions:** 24-hour clock everywhere (never AM/PM), weeks start on Monday, ISO week numbers. Day and month names in English or Swedish (Settings → Appearance).
   - An **agent** (`Ctrl+J`) can search, read, archive, flag, move, draft, schedule and respond to invites for you. Sending, deleting, creating events and responding to invitations always ask first.
@@ -68,6 +73,9 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `d` / `w` / `m` / `a` | calendar: day / week / month / agenda |
 | `h` / `l`, `t` | calendar: previous / next period, today |
 | `n`, `e`, `#` | calendar: new event, edit, delete |
+| `i`, `[` / `]` | calendar: insights, move selected event a day |
+| `z`, `g z` | snooze, snoozed mail |
+| `g j` | join the current / next meeting |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |
 | `?` | all shortcuts |

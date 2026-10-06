@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS bodies (
   text TEXT NOT NULL,
   bcc_json TEXT NOT NULL DEFAULT '[]',
   reply_to_json TEXT NOT NULL DEFAULT '[]',
-  attachments_json TEXT NOT NULL DEFAULT '[]'
+  attachments_json TEXT NOT NULL DEFAULT '[]',
+  unsubscribe_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS annotations (
@@ -127,6 +128,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_acc_start ON events(account_id, start_local);
 
+CREATE TABLE IF NOT EXISTS snoozes (
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  until TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS snoozes_until ON snoozes(until);
+
+CREATE TABLE IF NOT EXISTS event_notes (
+  event_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS calendars (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -158,6 +171,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         .exists([])?;
     if !has {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN meeting_type TEXT")?;
+    }
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('bodies') WHERE name = 'unsubscribe_json'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE bodies ADD COLUMN unsubscribe_json TEXT")?;
     }
     for (col, ddl) in [
         ("calendar_id", "TEXT NOT NULL DEFAULT ''"),
@@ -213,7 +230,8 @@ fn row_event(r: &Row) -> rusqlite::Result<CalEvent> {
 
 const SUMMARY_COLS: &str = "m.id, m.account_id, m.folder_id, m.conversation_id, m.subject, m.from_name, m.from_email, \
   m.to_json, m.preview, m.received_at, m.is_read, m.is_flagged, m.has_attachments, m.importance, \
-  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply, m.meeting_type";
+  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply, m.meeting_type, \
+  (SELECT until FROM snoozes s WHERE s.message_id = m.id)";
 
 fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
     let id: String = r.get(0)?;
@@ -247,6 +265,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
         importance: r.get(13)?,
         meeting_type: r.get(21)?,
         ai,
+        snoozed_until: r.get(22)?,
     })
 }
 
@@ -291,6 +310,9 @@ pub struct StoredBody {
     pub bcc: Vec<Addr>,
     pub reply_to: Vec<Addr>,
     pub attachments: Vec<Attachment>,
+    pub unsubscribe: Option<Unsubscribe>,
+    /// False for bodies cached before headers were read (fetch them once on open).
+    pub headers_checked: bool,
 }
 
 /// Turns free text into a safe FTS5 prefix query: `"foo"* "bar"*`.
@@ -658,6 +680,9 @@ impl Db {
                 wh.push("a.category = ? AND m.folder_id IN (SELECT id FROM folders WHERE well_known = 'inbox')".into());
                 args.push(category.clone().into());
             }
+            MessageView::Snoozed => {
+                wh.push("m.id IN (SELECT message_id FROM snoozes)".into());
+            }
             MessageView::Search { query } => {
                 let fq = fts_query(query);
                 if fq.is_empty() {
@@ -666,6 +691,10 @@ impl Db {
                 wh.push("m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)".into());
                 args.push(fq.into());
             }
+        }
+        // Snoozed mail stays out of every mailbox view until it wakes (search still finds it).
+        if !matches!(q.view, MessageView::Snoozed | MessageView::Search { .. }) {
+            wh.push("m.id NOT IN (SELECT message_id FROM snoozes)".into());
         }
         if let Some(acc) = &q.account_id {
             wh.push("m.account_id = ?".into());
@@ -768,7 +797,8 @@ impl Db {
                AND m.id = (
                  SELECT m2.id FROM messages m2 JOIN folders f2 ON f2.id = m2.folder_id AND f2.well_known = 'sentitems'
                  WHERE m2.account_id = m.account_id AND m2.conversation_id = m.conversation_id
-                 ORDER BY m2.received_at DESC LIMIT 1)
+                 AND m.id NOT IN (SELECT message_id FROM snoozes)
+             ORDER BY m2.received_at DESC LIMIT 1)
              ORDER BY m.received_at DESC LIMIT ?2"
         );
         let mut st = c.prepare(&sql)?;
@@ -786,6 +816,7 @@ impl Db {
              WHERE a.due_at IS NOT NULL
                AND m.folder_id IN (SELECT id FROM folders WHERE well_known = 'inbox')
                AND a.due_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
+             AND m.id NOT IN (SELECT message_id FROM snoozes)
              ORDER BY a.due_at ASC LIMIT ?"
         );
         let mut st = c.prepare(&sql)?;
@@ -931,6 +962,76 @@ impl Db {
             .collect())
     }
 
+    // ---------- snooze ----------
+    pub fn snooze(&self, ids: &[String], until: &str) -> Result<()> {
+        let c = self.conn();
+        for id in ids {
+            c.execute(
+                "INSERT INTO snoozes (message_id, until) SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM messages WHERE id = ?1)
+                 ON CONFLICT(message_id) DO UPDATE SET until = excluded.until",
+                params![id, until],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn unsnooze(&self, ids: &[String]) -> Result<()> {
+        let c = self.conn();
+        for id in ids {
+            c.execute("DELETE FROM snoozes WHERE message_id = ?1", [id])?;
+        }
+        Ok(())
+    }
+
+    /// Removes and returns snoozes whose time has come (`now` = UTC ISO "…Z").
+    pub fn take_due_snoozes(&self, now: &str) -> Result<Vec<String>> {
+        let c = self.conn();
+        let ids: Vec<String> = c
+            .prepare("SELECT message_id FROM snoozes WHERE until <= ?1")?
+            .query_map([now], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        c.execute("DELETE FROM snoozes WHERE until <= ?1", [now])?;
+        Ok(ids)
+    }
+
+    pub fn snoozed_count(&self) -> Result<i64> {
+        let c = self.conn();
+        Ok(c.query_row("SELECT count(*) FROM snoozes", [], |r| r.get(0))?)
+    }
+
+    // ---------- event notes ----------
+    pub fn event_note(&self, event_id: &str) -> Result<Option<String>> {
+        let c = self.conn();
+        Ok(c.query_row("SELECT text FROM event_notes WHERE event_id = ?1", [event_id], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_event_note(&self, event_id: &str, text: &str) -> Result<()> {
+        let c = self.conn();
+        if text.trim().is_empty() {
+            c.execute("DELETE FROM event_notes WHERE event_id = ?1", [event_id])?;
+        } else {
+            c.execute(
+                "INSERT INTO event_notes (event_id, text, updated_at) VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                 ON CONFLICT(event_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at",
+                params![event_id, text],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Which of `ids` have notes (for the note marker on events).
+    pub fn event_ids_with_notes(&self) -> Result<Vec<String>> {
+        let c = self.conn();
+        let ids = c.prepare("SELECT event_id FROM event_notes")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(ids)
+    }
+
+    pub fn set_unsubscribe(&self, id: &str, u: &Option<Unsubscribe>) -> Result<()> {
+        let c = self.conn();
+        c.execute("UPDATE bodies SET unsubscribe_json = ?1 WHERE message_id = ?2", params![serde_json::to_string(u)?, id])?;
+        Ok(())
+    }
+
     // ---------- bodies ----------
     /// Recent messages (any folder, inbox first, newest first) whose body is not cached yet.
     pub fn ids_without_body(&self, account_id: &str, limit: i64) -> Result<Vec<String>> {
@@ -951,15 +1052,18 @@ impl Db {
     pub fn body(&self, id: &str) -> Result<Option<StoredBody>> {
         let c = self.conn();
         Ok(c.query_row(
-            "SELECT html, text, bcc_json, reply_to_json, attachments_json FROM bodies WHERE message_id = ?",
+            "SELECT html, text, bcc_json, reply_to_json, attachments_json, unsubscribe_json FROM bodies WHERE message_id = ?",
             [id],
             |r| {
+                let unsub: Option<String> = r.get(5)?;
                 Ok(StoredBody {
                     html: r.get(0)?,
                     text: r.get(1)?,
                     bcc: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(),
                     reply_to: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
                     attachments: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+                    headers_checked: unsub.is_some(),
+                    unsubscribe: unsub.and_then(|s| serde_json::from_str(&s).ok()).flatten(),
                 })
             },
         )
@@ -969,15 +1073,16 @@ impl Db {
     pub fn set_body(&self, id: &str, b: &StoredBody) -> Result<()> {
         let c = self.conn();
         c.execute(
-            "INSERT OR REPLACE INTO bodies (message_id, html, text, bcc_json, reply_to_json, attachments_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO bodies (message_id, html, text, bcc_json, reply_to_json, attachments_json, unsubscribe_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 id,
                 b.html,
                 b.text,
                 serde_json::to_string(&b.bcc)?,
                 serde_json::to_string(&b.reply_to)?,
-                serde_json::to_string(&b.attachments)?
+                serde_json::to_string(&b.attachments)?,
+                if b.headers_checked { Some(serde_json::to_string(&b.unsubscribe)?) } else { None },
             ],
         )?;
         // Re-index with body text for full-text search.
@@ -1076,6 +1181,38 @@ mod tests {
     }
 
     #[test]
+    fn snooze_hides_until_due() {
+        let db = mem();
+        seed(&db);
+        db.upsert_messages(&[msg("m1", "inbox", "Invoice", "2026-10-05T10:00:00Z"), msg("m2", "inbox", "Hello", "2026-10-06T09:00:00Z")]).unwrap();
+        let q = |view| MessageQuery { view, account_id: None, unread_only: false, limit: 50, before: None };
+        db.snooze(&["m1".into()], "2026-10-07T07:00:00Z").unwrap();
+        let inbox: Vec<String> = db.list(&q(MessageView::Unified { well_known: "inbox".into() })).unwrap().into_iter().map(|m| m.id).collect();
+        assert_eq!(inbox, vec!["m2"]);
+        let snoozed = db.list(&q(MessageView::Snoozed)).unwrap();
+        assert_eq!(snoozed.len(), 1);
+        assert_eq!(snoozed[0].snoozed_until.as_deref(), Some("2026-10-07T07:00:00Z"));
+        // search still finds snoozed mail
+        assert_eq!(db.list(&q(MessageView::Search { query: "invoice".into() })).unwrap().len(), 1);
+        assert!(db.take_due_snoozes("2026-10-07T06:59:59Z").unwrap().is_empty());
+        assert_eq!(db.take_due_snoozes("2026-10-07T07:00:00Z").unwrap(), vec!["m1"]);
+        assert_eq!(db.list(&q(MessageView::Unified { well_known: "inbox".into() })).unwrap().len(), 2);
+        // snoozing an unknown id is a no-op
+        db.snooze(&["nope".into()], "2030-01-01T00:00:00Z").unwrap();
+        assert_eq!(db.snoozed_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn event_notes_roundtrip() {
+        let db = mem();
+        db.set_event_note("e1", "Agreed on Q4 budget").unwrap();
+        assert_eq!(db.event_note("e1").unwrap().as_deref(), Some("Agreed on Q4 budget"));
+        assert_eq!(db.event_ids_with_notes().unwrap(), vec!["e1"]);
+        db.set_event_note("e1", "  ").unwrap();
+        assert!(db.event_note("e1").unwrap().is_none());
+    }
+
+    #[test]
     fn upsert_list_search_and_moves() {
         let db = mem();
         seed(&db);
@@ -1099,7 +1236,7 @@ mod tests {
         assert_eq!(db.list(&q(MessageView::Search { query: "lindstrom".into() })).unwrap().len(), 2);
 
         // body indexing
-        db.set_body("m2", &StoredBody { html: "<p>pizza</p>".into(), text: "pizza at noon".into(), bcc: vec![], reply_to: vec![], attachments: vec![] })
+        db.set_body("m2", &StoredBody { html: "<p>pizza</p>".into(), text: "pizza at noon".into(), bcc: vec![], reply_to: vec![], attachments: vec![], unsubscribe: None, headers_checked: true })
             .unwrap();
         assert_eq!(db.list(&q(MessageView::Search { query: "pizza".into() })).unwrap()[0].id, "m2");
 

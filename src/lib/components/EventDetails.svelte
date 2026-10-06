@@ -9,6 +9,12 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { X, Video, MapPin, ExternalLink, Check, CircleHelp, Ban, Crown, CircleAlert, Sparkles, AlertTriangle, Pencil, Trash2, Copy, Repeat, Bell, Lock, LockOpen, Mail, Link as LinkIcon, CalendarClock } from "@lucide/svelte";
   import MeetingPrep from "./MeetingPrep.svelte";
+  import { followUpFromNotes, textToHtml, isAbort } from "$lib/ai";
+  import { api } from "$lib/api";
+  import { hhmmIn, tzLabel, dayShiftIn } from "$lib/util/fmt";
+  import { toasts } from "$lib/state/toasts.svelte";
+  import { errMsg } from "$lib/util/misc";
+  import { NotebookPen, Send as SendIcon, LoaderCircle, Clock3, CalendarArrowUp, CalendarPlus2, Globe } from "@lucide/svelte";
   import ProposeTime from "./ProposeTime.svelte";
 
   const ev = $derived(calendar.details);
@@ -28,6 +34,60 @@
   let cancelNote = $state("");
   let proposing = $state(false);
   const isPrivate = $derived(ev?.sensitivity === "private");
+  const canMove = $derived(!!ev && calendar.canChangeTime(ev));
+  const tz2 = $derived(app.settings?.calendar.secondaryTimeZone ?? null);
+
+  // ---- notes (local, autosaved) ----
+  let notes = $state("");
+  let notesOpen = $state(false);
+  let notesLoadedFor = "";
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let following = $state(false);
+  $effect(() => {
+    const id = ev?.id;
+    if (!id || id === notesLoadedFor) return;
+    notesLoadedFor = id;
+    notes = "";
+    notesOpen = false;
+    api.eventNoteGet(id).then((t) => {
+      if (notesLoadedFor !== id) return;
+      notes = t ?? "";
+      notesOpen = !!t;
+    });
+  });
+  function onNotesInput() {
+    const id = ev?.id;
+    if (!id) return;
+    clearTimeout(saveTimer);
+    const text = notes;
+    saveTimer = setTimeout(() => calendar.saveNote(id, text).catch((e) => toasts.error(`Notes: ${errMsg(e)}`)), 500);
+  }
+  /** Follow-up email to everyone, drafted from the notes (AI when available). */
+  async function followUp() {
+    if (!ev || !notes.trim()) return;
+    // The popover can close or switch event while the draft streams; work on a snapshot.
+    const e0 = ev;
+    const text = notes;
+    const me = new Set(app.accounts.map((a) => a.email.toLowerCase()));
+    const to = [...(e0.organizer ? [e0.organizer] : []), ...e0.attendees.filter((a) => a.type !== "resource").map((a) => a.addr)].filter(
+      (a, i, arr) => !me.has(a.email.toLowerCase()) && arr.findIndex((b) => b.email.toLowerCase() === a.email.toLowerCase()) === i,
+    );
+    let body = text.trim();
+    if (app.aiReady) {
+      following = true;
+      try {
+        let acc = "";
+        for await (const d of followUpFromNotes(e0, text)) acc += d;
+        if (acc.trim()) body = acc.trim();
+      } catch (e) {
+        if (!isAbort(e)) toasts.error(`AI: ${errMsg(e)} — using your notes as they are`);
+      } finally {
+        following = false;
+      }
+    }
+    composer.compose({ accountId: e0.accountId, to, subject: `Follow-up: ${e0.subject}`, bodyHtml: textToHtml(body) });
+    if (calendar.detailsId === e0.id) calendar.openDetails(null);
+  }
 
   $effect(() => {
     void ev?.id;
@@ -217,9 +277,36 @@
         <p class="preview" class:full={!!full}>{description}</p>
       {/if}
 
+      {#if tz2 && !ev.isAllDay}
+        <div class="row tz2"><Globe size={14} /><span><b class="mono">{hhmmIn(ev.start, tz2)}–{hhmmIn(ev.end, tz2)}</b> {tzLabel(tz2)}{#if dayShiftIn(ev.start, tz2) !== 0}<span class="shift"> ({dayShiftIn(ev.start, tz2) > 0 ? "next day" : "previous day"})</span>{/if}</span></div>
+      {/if}
+
+      {#if canMove && !past}
+        <div class="resched" aria-label="Quick reschedule">
+          <span class="rl"><Clock3 size={12} /> Move</span>
+          {#if !ev.isAllDay}<button class="chip" onclick={() => calendar.reschedule(ev, "later")} title="One hour later">+1 h</button>{/if}
+          <button class="chip" onclick={() => calendar.reschedule(ev, "tomorrow")} title="Same time tomorrow (])"><CalendarArrowUp size={12} /> Tomorrow</button>
+          <button class="chip" onclick={() => calendar.reschedule(ev, "nextWeek")} title="Same time next week"><CalendarPlus2 size={12} /> Next week</button>
+        </div>
+      {/if}
+
       {#if !ev.isCancelled && !past && (ev.attendees.length || ev.organizer)}
         <MeetingPrep {ev} />
       {/if}
+
+      <div class="notes" class:open={notesOpen}>
+        {#if notesOpen}
+          <div class="nh"><NotebookPen size={13} /> <span>Notes</span><span class="nhint">private to Tern · saved automatically</span></div>
+          <textarea bind:value={notes} oninput={onNotesInput} rows="4" placeholder="Decisions, action items, who does what…"></textarea>
+          {#if notes.trim() && (ev.attendees.length || (ev.organizer && ev.response !== "organizer"))}
+            <button class="btn sm" onclick={followUp} disabled={following}>
+              {#if following}<LoaderCircle size={12} class="spin" /> Writing…{:else}<SendIcon size={12} /> {app.aiReady ? "Draft follow-up email" : "Email notes to attendees"}{/if}
+            </button>
+          {/if}
+        {:else}
+          <button class="lnk small addnotes" onclick={() => (notesOpen = true)}><NotebookPen size={12} /> Add meeting notes</button>
+        {/if}
+      </div>
 
       {#if proposing}
         <ProposeTime {ev} onclose={() => (proposing = false)} />
@@ -553,6 +640,93 @@
   }
   .dash {
     font-size: 11px;
+  }
+  .tz2 .shift {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tz2 b {
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .resched {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rl {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-right: 2px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    transition: all var(--t);
+  }
+  .chip:hover {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+  }
+  .notes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .notes.open {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: color-mix(in oklab, var(--yellow) 6%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--yellow) 22%, var(--line));
+  }
+  .nh {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--yellow) 85%, var(--fg));
+  }
+  .nhint {
+    margin-left: auto;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--muted);
+  }
+  .notes textarea {
+    width: 100%;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg);
+    background: transparent;
+    border: 0;
+    outline: 0;
+    resize: vertical;
+    min-height: 70px;
+  }
+  .notes .btn {
+    align-self: flex-start;
+  }
+  .addnotes {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    align-self: flex-start;
   }
   .preview {
     margin: 0;

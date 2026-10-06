@@ -11,6 +11,7 @@
     Maximize2,
     Minimize2,
     Send,
+    Clock,
     Sparkles,
     Bold,
     Italic,
@@ -59,6 +60,34 @@
     editor?.focus();
     document.execCommand(cmd, false, val);
     oninput();
+  }
+
+  // ---- send later ----
+  let laterOpen = $state(false);
+  let laterCustom = $state("");
+  function laterPresets() {
+    const now = new Date();
+    const d = (days: number, h: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, h, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const hint = (x: Date) => `${x.toLocaleDateString("en-GB", { weekday: "short" })} ${pad(x.getHours())}:${pad(x.getMinutes())}`;
+    const out: { label: string; at: Date; hint: string }[] = [];
+    if (now.getHours() < 16) {
+      const a = new Date(now.getTime() + 2 * 3_600_000);
+      a.setSeconds(0, 0);
+      a.setMinutes(Math.ceil(a.getMinutes() / 15) * 15);
+      out.push({ label: "In two hours", at: a, hint: hint(a) });
+    }
+    const tm = d(1, 8);
+    out.push({ label: "Tomorrow morning", at: tm, hint: hint(tm) });
+    const dow = now.getDay();
+    const mon = d(((8 - dow) % 7) || 7, 8);
+    out.push({ label: "Monday morning", at: mon, hint: hint(mon) });
+    return out;
+  }
+  function sendLater(at: Date) {
+    if (Number.isNaN(at.getTime())) return;
+    laterOpen = false;
+    composer.send(at);
   }
 
   function addLink() {
@@ -201,9 +230,24 @@
       {/if}
 
       <footer>
-        <button class="btn primary" onclick={() => composer.send()} disabled={composer.aiBusy}>
-          <Send size={14} /> Send <kbd>^↵</kbd>
-        </button>
+        <div class="sendgrp">
+          <button class="btn primary" onclick={() => composer.send()} disabled={composer.aiBusy}>
+            <Send size={14} /> Send <kbd>^↵</kbd>
+          </button>
+          <button class="btn primary later" onclick={() => (laterOpen = !laterOpen)} disabled={composer.aiBusy} title="Send later" aria-label="Send later"><Clock size={14} /></button>
+          {#if laterOpen}
+            <div class="latermenu" role="menu">
+              {#each laterPresets() as p (p.label)}
+                <button role="menuitem" onclick={() => sendLater(p.at)}><span>{p.label}</span><span class="mono">{p.hint}</span></button>
+              {/each}
+              <div class="lc">
+                <input type="datetime-local" class="field" bind:value={laterCustom} step="900" />
+                <button class="btn sm" onclick={() => sendLater(new Date(laterCustom))} disabled={!laterCustom}>Schedule</button>
+              </div>
+              <div class="lh">Outlook holds it and sends at that time, even if Tern is closed.</div>
+            </div>
+          {/if}
+        </div>
         <div class="fmt">
           <button class="icon-btn s" title="Bold" onclick={() => exec("bold")}><Bold size={14} /></button>
           <button class="icon-btn s" title="Italic" onclick={() => exec("italic")}><Italic size={14} /></button>
@@ -455,6 +499,68 @@
     align-items: center;
     gap: 8px;
     padding: 10px 12px 12px 14px;
+  }
+  .sendgrp {
+    position: relative;
+    display: inline-flex;
+    gap: 1px;
+  }
+  .sendgrp > .btn.primary:first-child {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .later {
+    padding: 0 8px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .latermenu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 6px);
+    z-index: 5;
+    width: 270px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--raised);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    animation: fade-up 140ms var(--ease);
+  }
+  .latermenu > button {
+    display: flex;
+    justify-content: space-between;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--fg);
+  }
+  .latermenu > button:hover {
+    background: var(--accent-soft);
+  }
+  .latermenu .mono {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .lc {
+    display: flex;
+    gap: 6px;
+    padding: 6px 4px 2px;
+    border-top: 1px solid var(--line);
+    margin-top: 4px;
+  }
+  .lc .field {
+    height: 28px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+  }
+  .lh {
+    font-size: 10.5px;
+    color: var(--muted);
+    padding: 2px 6px 2px;
   }
   footer kbd {
     background: transparent;

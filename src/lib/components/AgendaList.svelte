@@ -99,7 +99,8 @@
       <span><kbd>e</kbd> edit</span>
       <span><kbd>n</kbd> new</span>
       <span><kbd>h</kbd><kbd>l</kbd> period</span>
-      <span><kbd>d</kbd><kbd>w</kbd><kbd>m</kbd><kbd>a</kbd> views</span>
+      <span><kbd>d</kbd><kbd>w</kbd><kbd>m</kbd><kbd>a</kbd><kbd>i</kbd> views</span>
+      <span><kbd>[</kbd><kbd>]</kbd> move a day</span>
     </div>
   </div>
 </div>

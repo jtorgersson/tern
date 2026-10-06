@@ -15,6 +15,7 @@
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import Cheatsheet from "$lib/components/Cheatsheet.svelte";
+  import SnoozePicker from "$lib/components/SnoozePicker.svelte";
   import Onboarding from "$lib/components/Onboarding.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Logo from "$lib/components/Logo.svelte";
@@ -92,6 +93,7 @@
   <EventDetails />
   <CommandPalette />
   <Cheatsheet />
+  <SnoozePicker />
 {/if}
 
 {#if app.ready}

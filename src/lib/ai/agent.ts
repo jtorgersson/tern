@@ -250,6 +250,7 @@ function describeView(v: MessageView): string {
     case "flagged": return "flagged";
     case "category": return `AI category ${v.category}`;
     case "search": return `search "${v.query}"`;
+    case "snoozed": return "snoozed mail";
   }
 }
 

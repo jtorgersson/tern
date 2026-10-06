@@ -2,6 +2,7 @@
 // Tauri converts camelCase JS argument keys to snake_case Rust parameters.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Availability,
   Account,
   CalEvent,
   Calendar,
@@ -90,6 +91,19 @@ export const api = {
   /** `proposed` (tentative/decline only) sends a counter-proposal to the organizer. */
   inviteRespond: (accountId: string, eventId: string, action: InviteAction, comment: string | null, sendResponse = true, proposed: { start: string; end: string } | null = null) =>
     invoke<void>("invite_respond", { accountId, eventId, action, comment, sendResponse, proposedStart: proposed?.start ?? null, proposedEnd: proposed?.end ?? null }),
+  /** Snooze until `until` (ISO with offset or Z); null wakes them now. Snoozed mail is marked read and hidden. */
+  snooze: (ids: string[], until: string | null) => invoke<void>("messages_snooze", { ids, until }),
+  snoozedCount: () => invoke<number>("snoozed_count"),
+  /** RFC 8058 one-click unsubscribe using the link from the message's own headers. */
+  unsubscribeOneClick: (messageId: string) => invoke<void>("unsubscribe_one_click", { messageId }),
+  eventNoteGet: (eventId: string) => invoke<string | null>("event_note_get", { eventId }),
+  /** Empty text deletes the note. */
+  eventNoteSet: (eventId: string, text: string) => invoke<void>("event_note_set", { eventId, text }),
+  /** Ids of events that have notes. */
+  eventNotesIndex: () => invoke<string[]>("event_notes_index"),
+  /** Per-person free/busy (scheduling assistant). Fails for personal Microsoft accounts. */
+  availability: (accountId: string, emails: string[], from: string, to: string, interval = 30) =>
+    invoke<Availability[]>("calendar_availability", { accountId, emails, from, to, interval }),
   /** Free-text search over every cached event (subject, place, people, notes), closest to now first. */
   calendarSearch: (query: string, limit = 40) => invoke<CalEvent[]>("calendar_search", { query, limit }),
   eventCreate: (draft: EventDraft) => invoke<CalEvent>("event_create", { draft }),

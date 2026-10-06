@@ -2,10 +2,10 @@
   import type { MessageSummary } from "$lib/types";
   import { app, CATEGORY_META } from "$lib/state/app.svelte";
   import { hueColor } from "$lib/theme";
-  import { shortTime } from "$lib/util/time";
+  import { shortTime, longTime } from "$lib/util/time";
   import { displayName } from "$lib/util/misc";
   import Avatar from "./Avatar.svelte";
-  import { Paperclip, Star, Archive, Trash2, Mail, MailOpen, Sparkles, Check, CalendarDays } from "@lucide/svelte";
+  import { AlarmClock, Paperclip, Star, Archive, Trash2, Mail, MailOpen, Sparkles, Check, CalendarDays } from "@lucide/svelte";
 
   let {
     m,
@@ -65,7 +65,11 @@
       {#if m.meetingType && m.meetingType !== "none"}<CalendarDays size={12} class="meta-ic cal" />{/if}
       {#if m.hasAttachments}<Paperclip size={12} class="meta-ic" />{/if}
       {#if m.isFlagged}<Star size={12} class="flag" fill="currentColor" />{/if}
-      <span class="time mono">{shortTime(m.receivedAt)}</span>
+      {#if m.snoozedUntil}
+        <span class="time mono snz" title="Snoozed until {longTime(m.snoozedUntil)}"><AlarmClock size={11} /> {shortTime(m.snoozedUntil)}</span>
+      {:else}
+        <span class="time mono">{shortTime(m.receivedAt)}</span>
+      {/if}
       <span class="hover-actions">
         <button title="Archive (e)" onclick={(e) => stop(e, () => app.archive([m.id]))}><Archive size={14} /></button>
         <button title="Delete (#)" onclick={(e) => stop(e, () => app.trash([m.id]))}><Trash2 size={14} /></button>
@@ -73,6 +77,7 @@
           {#if m.isRead}<Mail size={14} />{:else}<MailOpen size={14} />{/if}
         </button>
         <button title="Flag (s)" class:on={m.isFlagged} onclick={(e) => stop(e, () => app.toggleFlag([m.id]))}><Star size={14} /></button>
+        <button title={m.snoozedUntil ? "Unsnooze" : "Snooze (z)"} onclick={(e) => stop(e, () => (m.snoozedUntil ? app.unsnooze([m.id]) : app.openSnooze([m.id])))}><AlarmClock size={14} /></button>
       </span>
     </div>
     <div class="line2">
@@ -277,5 +282,11 @@
   }
   .summary {
     color: color-mix(in oklab, var(--fg-dim) 85%, var(--accent));
+  }
+  .snz {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--accent);
   }
 </style>

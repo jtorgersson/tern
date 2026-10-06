@@ -131,6 +131,7 @@ class AppState {
         await this.refreshFolders();
         await this.reload();
         this.refreshCounts();
+        this.refreshSnoozed();
         this.scheduleTriage(1500);
         import("./calendar.svelte").then(({ calendar }) => calendar.load({ silent: true }));
         const mailto = await invoke<string | null>("take_pending_mailto");
@@ -166,12 +167,17 @@ class AppState {
       }),
       await listen<MailChangedEvent>(EVENTS.mailChanged, (e) => {
         this.scheduleRefresh();
+        this.refreshSnoozed();
         if (e.payload.newMessageIds.length) this.scheduleTriage(800);
       }),
       await listen<AuthProgressEvent>(EVENTS.authProgress, (e) => {
         this.authProgress = e.payload;
       }),
       await listen<string>("app://mailto", (e) => this.openMailto(e.payload)),
+      await listen<string[]>("snooze://woke", () => {
+        this.refreshSnoozed();
+        this.scheduleRefresh();
+      }),
       await listen(EVENTS.calendarChanged, async () => {
         const { calendar } = await import("./calendar.svelte");
         calendar.load({ silent: true });
@@ -436,6 +442,8 @@ class AppState {
           : wkLabel(v.wellKnown);
       case "flagged":
         return "Flagged";
+      case "snoozed":
+        return "Snoozed";
       case "category":
         return CATEGORY_META[v.category].label;
       case "search":
@@ -569,6 +577,60 @@ class AppState {
       }
     }
     return removed;
+  }
+
+  /** Snoozed message count (sidebar). */
+  snoozedCount = $state(0);
+  /** Messages the snooze picker is open for. */
+  snoozeTarget = $state<string[] | null>(null);
+
+  openSnooze(ids = this.targetIds()) {
+    if (ids.length) this.snoozeTarget = ids;
+  }
+
+  async refreshSnoozed() {
+    try {
+      this.snoozedCount = await api.snoozedCount();
+    } catch {}
+  }
+
+  /** Hide until `until`; it comes back unread with a notification. */
+  async snooze(ids: string[], until: Date) {
+    if (!ids.length) return;
+    // Snoozing marks mail read; remember what was unread so Undo can restore it.
+    const wasUnread = ids.filter((id) => {
+      const m = this.messages.find((x) => x.id === id) ?? (this.open?.id === id ? this.open : null);
+      return m ? !m.isRead : false;
+    });
+    const removed = this.view.kind === "snoozed" ? [] : this.removeLocal(ids);
+    try {
+      await api.snooze(ids, until.toISOString());
+      const { weekdayDayMonth, hhmm } = await import("$lib/util/fmt");
+      toasts.show(`Snoozed until ${weekdayDayMonth(until)} ${hhmm(until)}`, {
+        kind: "success",
+        timeout: 6000,
+        action: { label: "Undo", run: () => this.unsnooze(ids, wasUnread) },
+      });
+      if (this.view.kind === "snoozed") this.reload(true);
+      this.refreshSnoozed();
+      this.refreshCounts();
+    } catch (e) {
+      toasts.error(errMsg(e));
+      if (removed.length) this.reload(true);
+    }
+  }
+
+  /** Wake now. `markUnread` defaults to all: woken mail comes back unread, like when its time comes. */
+  async unsnooze(ids: string[], markUnread: string[] = ids) {
+    try {
+      await api.snooze(ids, null);
+      if (markUnread.length) await api.setRead(markUnread, false).catch(() => {});
+      if (this.view.kind === "snoozed") this.removeLocal(ids);
+      else this.reload(true);
+      this.refreshSnoozed();
+    } catch (e) {
+      toasts.error(errMsg(e));
+    }
   }
 
   async archive(ids = this.targetIds()) {

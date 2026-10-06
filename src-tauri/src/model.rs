@@ -66,6 +66,30 @@ pub struct MessageSummary {
     pub importance: String,
     pub meeting_type: Option<String>,
     pub ai: Option<Annotation>,
+    /// UTC ISO time the message is snoozed until (hidden from mailbox views until then).
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+}
+
+/// List-Unsubscribe info from the message headers (RFC 2369 / RFC 8058).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Unsubscribe {
+    /// https link (opened in the browser, or POSTed when `one_click`).
+    pub url: Option<String>,
+    /// mailto: link.
+    pub mailto: Option<String>,
+    /// RFC 8058 one-click: a POST to `url` unsubscribes without a web page.
+    pub one_click: bool,
+}
+
+/// Free/busy of one person from getSchedule. `view` has one digit per interval: 0 free, 1 tentative, 2 busy, 3 oof, 4 elsewhere.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Availability {
+    pub email: String,
+    pub view: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +115,8 @@ pub struct MessageFull {
     pub body_text: String,
     pub attachments: Vec<Attachment>,
     pub web_link: Option<String>,
+    #[serde(default)]
+    pub unsubscribe: Option<Unsubscribe>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,6 +133,7 @@ pub enum MessageView {
     Flagged,
     Category { category: String },
     Search { query: String },
+    Snoozed,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,6 +158,9 @@ pub struct OutgoingMessage {
     pub bcc: Vec<Addr>,
     pub subject: String,
     pub body_html: String,
+    /// Deliver later: UTC ISO ("…Z"). Exchange holds the message in the Outbox until then (works with Tern closed).
+    #[serde(default)]
+    pub send_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

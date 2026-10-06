@@ -6,8 +6,8 @@
   import { calendar } from "$lib/state/calendar.svelte";
   import type { CalEvent } from "$lib/types";
   import { addDays, dayKey, layoutDay, minutesBetween, minutesIntoDay, snap, toLocalIso, isBusy, hm, durationLabel, type Placed } from "$lib/util/cal";
-  import { weekdayShort } from "$lib/util/fmt";
-  import { Video, MapPin, Repeat, Lock, CircleAlert } from "@lucide/svelte";
+  import { weekdayShort, hhmmIn, tzLabel } from "$lib/util/fmt";
+  import { Video, MapPin, Repeat, Lock, CircleAlert, NotebookPen } from "@lucide/svelte";
   import { tick } from "svelte";
 
   const HOUR = 52; // px per hour
@@ -131,9 +131,17 @@
     if (d.kind === "move") await calendar.move(d.ev, at(d.top), at(d.top + d.dur)).catch(() => {});
     else await calendar.move(d.ev, d.ev.start, at(d.bottom)).catch(() => {});
   }
+  /** Only the organizer (or an event without attendees) can be dragged; Microsoft rejects time changes from attendees. */
   function canEdit(ev: CalEvent): boolean {
-    return !ev.isCancelled && (calendar.calendarById.get(ev.calendarId)?.canEdit ?? true);
+    return calendar.canChangeTime(ev);
   }
+  // ---- second time zone in the gutter ----
+  const tz2 = $derived(app.settings?.calendar.secondaryTimeZone ?? null);
+  const tz2Labels = $derived.by(() => {
+    if (!tz2) return [] as string[];
+    const base = days[0] ?? new Date();
+    return hours.map((h) => hhmmIn(new Date(base.getFullYear(), base.getMonth(), base.getDate(), h), tz2));
+  });
 
   /** Where an event is drawn, taking an in-progress drag into account (clipped to the day like layoutDay). */
   function box(p: Placed<CalEvent>, colIdx: number): { top: number; height: number; hidden: boolean } {
@@ -170,9 +178,9 @@
   const past = (ev: CalEvent) => ev.end <= toLocalIso(calendar.now);
 </script>
 
-<div class="tg" class:single={cols.length === 1}>
+<div class="tg" class:single={cols.length === 1} class:tz2={!!tz2}>
   <div class="head" style:--n={cols.length}>
-    <div class="gutter"></div>
+    <div class="gutter tzh">{#if tz2}<span class="mono" title={tz2}>{tzLabel(tz2)}</span><span class="mono here">{tzLabel(Intl.DateTimeFormat().resolvedOptions().timeZone)}</span>{/if}</div>
     {#each cols as c (c.key)}
       <button class="dh" class:today={c.key === todayKey} class:wkend={c.day.getDay() === 0 || c.day.getDay() === 6} onclick={() => calendar.goto(c.day, "day")}>
         <span class="dow">{weekdayShort(c.day)}</span>
@@ -210,7 +218,7 @@
     <div class="canvas" style:height="{24 * HOUR}px" style:--n={cols.length}>
       <div class="axis">
         {#each hours as h (h)}
-          <div class="hr" style:top="{h * HOUR}px"><span class="mono">{#if h}{pad(h)}:00{/if}</span></div>
+          <div class="hr" style:top="{h * HOUR}px">{#if tz2}<span class="mono alt">{#if h}{tz2Labels[h]}{/if}</span>{/if}<span class="mono">{#if h}{pad(h)}:00{/if}</span></div>
         {/each}
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -251,6 +259,7 @@
                   <div class="t">
                     <span class="title">{e.subject || "(no title)"}</span>
                     {#if e.response === "notResponded" && !e.isCancelled}<CircleAlert size={11} class="warn" />{/if}
+                    {#if calendar.notedIds.has(e.id)}<NotebookPen size={10} class="noted" />{/if}
                   </div>
                   <div class="m mono">
                     {hm(e.start)}–{hm(e.end)}
@@ -300,6 +309,29 @@
     display: flex;
     flex-direction: column;
     --gutter: 52px;
+  }
+  .tg.tz2 {
+    --gutter: 96px;
+  }
+  .tzh {
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 8px 8px 0;
+    font-size: 9.5px;
+    color: var(--muted);
+  }
+  .tzh .here {
+    color: var(--fg-dim);
+  }
+  .hr .alt {
+    color: color-mix(in oklab, var(--muted) 70%, transparent);
+    margin-right: 8px;
+  }
+  .t :global(.noted) {
+    flex: none;
+    color: color-mix(in oklab, var(--yellow) 85%, var(--fg));
   }
   .head,
   .allday {
