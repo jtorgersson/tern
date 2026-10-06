@@ -4,6 +4,7 @@ import { briefing, predraftReply } from "$lib/ai";
 import type { MessageFull, MessageSummary } from "$lib/types";
 import { app } from "./app.svelte";
 import { toasts } from "./toasts.svelte";
+import { calendar } from "./calendar.svelte";
 import { errMsg } from "$lib/util/misc";
 
 const BRIEFING_MAX_AGE = 2 * 3600_000;
@@ -115,7 +116,9 @@ class TodayState {
     const prev = this.briefingText;
     let acc = "";
     try {
-      for await (const d of briefing({ inbox: this.inbox, waiting: this.visibleWaiting, due: this.due }, ctrl.signal)) {
+      if (!calendar.loadedOnce) await calendar.load({ silent: true }).catch(() => {});
+      const events = [...calendar.todayEvents, ...calendar.tomorrowEvents];
+      for await (const d of briefing({ inbox: this.inbox, waiting: this.visibleWaiting, due: this.due, events }, ctrl.signal)) {
         if (ctrl.signal.aborted) break;
         acc += d;
         this.briefingText = acc;

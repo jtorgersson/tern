@@ -7,6 +7,9 @@
   import MessageList from "$lib/components/MessageList.svelte";
   import Reader from "$lib/components/Reader.svelte";
   import Today from "$lib/components/Today.svelte";
+  import Agenda from "$lib/components/Agenda.svelte";
+  import EventComposer from "$lib/components/EventComposer.svelte";
+  import EventDetails from "$lib/components/EventDetails.svelte";
   import Composer from "$lib/components/Composer.svelte";
   import AgentPanel from "$lib/components/AgentPanel.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
@@ -69,10 +72,12 @@
 {:else}
   <div class="app">
     <TopBar />
-    <main style:--list-w="{listWidth}px" class:today={app.view.kind === "today"}>
+    <main style:--list-w="{listWidth}px" class:today={app.isCanvasView}>
       <Sidebar />
       {#if app.view.kind === "today"}
         <Today />
+      {:else if app.view.kind === "agenda"}
+        <Agenda />
       {:else}
         <MessageList />
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -83,6 +88,8 @@
   </div>
   <AgentPanel />
   <Composer />
+  <EventComposer />
+  <EventDetails />
   <CommandPalette />
   <Cheatsheet />
 {/if}

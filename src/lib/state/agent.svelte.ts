@@ -2,6 +2,8 @@
 import { AgentSession, type AgentEvent } from "$lib/ai";
 import { app } from "./app.svelte";
 import { composer } from "./composer.svelte";
+import { calendar } from "./calendar.svelte";
+import { toasts } from "./toasts.svelte";
 
 export type AgentItem =
   | { kind: "user"; id: number; text: string }
@@ -131,6 +133,17 @@ class AgentState {
       case "show_results":
         app.showResults(action.title, action.ids);
         break;
+      case "open_event": {
+        const show = () => {
+          if (calendar.events.some((e) => e.id === action.id)) {
+            app.setView({ kind: "agenda" });
+            calendar.openDetails(action.id);
+          } else toasts.show("Event created — it will appear in the calendar after the next sync", { kind: "success" });
+        };
+        if (calendar.events.some((e) => e.id === action.id)) show();
+        else calendar.load({ silent: true }).then(show);
+        break;
+      }
     }
   }
 

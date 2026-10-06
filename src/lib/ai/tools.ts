@@ -4,26 +4,32 @@ import { api } from "../api";
 import type {
   Account,
   AiCategory,
+  CalEvent,
+  EventDraft,
   MessageSummary,
   MessageView,
   OutgoingMessage,
   WellKnownFolder,
 } from "../types";
 import type { ToolSpec } from "./backend";
-import { addr, compactSummary, emailBlock, threadBlock, truncate } from "./format";
+import { settings } from "./config";
+import { addr, compactEvent, compactSummary, emailBlock, threadBlock, truncate } from "./format";
 
 export type Approval = "never" | "safe" | "always";
 
 export type UiAction =
   | { kind: "open_message"; id: string }
   | { kind: "compose"; draft: Partial<OutgoingMessage> }
-  | { kind: "show_results"; title: string; ids: string[] };
+  | { kind: "show_results"; title: string; ids: string[] }
+  | { kind: "open_event"; id: string };
 
 export interface ToolCtx {
   ui(action: UiAction): void;
   accounts(): Promise<Account[]>;
   /** Messages the agent has seen this session (for labels / approval previews). */
   known: Map<string, MessageSummary>;
+  /** Calendar events the agent has seen this session. */
+  knownEvents: Map<string, CalEvent>;
   defaultAccountId: string | null;
 }
 
@@ -116,6 +122,25 @@ async function buildOutgoing(i: ComposeInput, ctx: ToolCtx): Promise<Partial<Out
     subject: subject ?? "",
     bodyHtml: textToHtml(i.body),
   };
+}
+
+const LocalIso = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "local ISO like 2026-10-08T14:00:00 (no offset)");
+
+function whenText(start: string, end: string, allDay = false): string {
+  const s = new Date(start);
+  const e = new Date(end);
+  const day = s.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  if (allDay) return `${day} · all day`;
+  const t = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const mins = Math.round((e.getTime() - s.getTime()) / 60_000);
+  const dur = mins >= 60 ? `${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ""}` : `${mins}m`;
+  return `${day}, ${t(s)} – ${t(e)} (${dur})`;
+}
+
+async function resolveAccount(id: string | undefined, ctx: ToolCtx): Promise<string> {
+  const acc = id ?? ctx.defaultAccountId ?? (await ctx.accounts())[0]?.id;
+  if (!acc) throw new Error("No account available");
+  return acc;
 }
 
 export const TOOLS = [
@@ -322,6 +347,139 @@ export const TOOLS = [
     async run(i, ctx) {
       ctx.ui({ kind: "open_message", id: i.id });
       return "Opened.";
+    },
+  }),
+
+  // ---------------- calendar ----------------
+  def({
+    name: "list_events",
+    description: "List calendar events between two local date-times (cached window: 7 days back to 3 weeks ahead). Includes attendees, the user's response, location and online-meeting flag.",
+    schema: z.object({
+      from: LocalIso.describe("Start of range, local ISO"),
+      to: LocalIso.describe("End of range (exclusive), local ISO"),
+      account_id: AccountId,
+    }),
+    approval: "never",
+    label: (i) => `Checking calendar ${i.from.slice(0, 10)} → ${i.to.slice(0, 10)}`,
+    async run(i, ctx) {
+      const list = await api.calendarEvents(i.from, i.to, i.account_id ?? null);
+      for (const e of list) ctx.knownEvents.set(e.id, e);
+      return { count: list.length, events: list.map(compactEvent) };
+    },
+  }),
+  def({
+    name: "find_free_times",
+    description: "Find free slots for a meeting of the given length within a range, inside the user's working hours. Pass attendees' emails to check their availability too (works for people in the same organisation).",
+    schema: z.object({
+      attendees: z.array(z.string()).optional().describe("Other people's email addresses to check (omit for just the user)"),
+      from: LocalIso.describe("Range start, local ISO"),
+      to: LocalIso.describe("Range end, local ISO"),
+      duration_mins: z.number().int().min(5).max(600).describe("Meeting length in minutes"),
+      account_id: AccountId,
+    }),
+    approval: "never",
+    label: (i) => `Finding ${i.duration_mins} min${i.attendees?.length ? ` with ${i.attendees.length} ${i.attendees.length === 1 ? "person" : "people"}` : ""}`,
+    async run(i, ctx) {
+      const accountId = await resolveAccount(i.account_id, ctx);
+      const cal = settings().calendar;
+      const slots = await api.freeSlots({
+        accountId,
+        attendees: i.attendees ?? [],
+        from: i.from,
+        to: i.to,
+        durationMins: i.duration_mins,
+        workStart: cal?.workStart,
+        workEnd: cal?.workEnd,
+      });
+      return {
+        count: slots.length,
+        workingHours: cal ? `${cal.workStart}–${cal.workEnd}` : undefined,
+        slots: slots.slice(0, 30).map((s) => ({ start: s.start, end: s.end, label: whenText(s.start, s.end) })),
+        note: slots.length ? undefined : "No free slots in that range within working hours; try a wider range.",
+      };
+    },
+  }),
+  def({
+    name: "create_event",
+    description: "Create a calendar event (an invitation is sent when attendees are given). Always asks the user to confirm. Propose times in chat first unless the user already named the exact time.",
+    schema: z.object({
+      subject: z.string().min(1),
+      start: LocalIso,
+      end: LocalIso,
+      attendees: z.array(Recipient).optional().describe("People to invite"),
+      location: z.string().optional(),
+      body: z.string().optional().describe("Plain-text description / agenda"),
+      is_online: z.boolean().optional().describe("Add a Teams meeting link (default true when there are attendees)"),
+      is_all_day: z.boolean().optional(),
+      account_id: AccountId,
+    }),
+    approval: "always",
+    label: (i) => `Creating “${truncate(i.subject, 36)}”`,
+    preview: (i) => {
+      const lines = [
+        `${i.subject}`,
+        `When: ${whenText(i.start, i.end, i.is_all_day)}`,
+        i.location ? `Where: ${i.location}` : "",
+        (i.is_online ?? (i.attendees?.length ?? 0) > 0) ? "Teams meeting link will be added" : "",
+        i.attendees?.length ? `Invite: ${i.attendees.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(", ")}` : "No attendees (personal event)",
+        i.body ? `\n${truncate(i.body, 400)}` : "",
+      ];
+      return lines.filter(Boolean).join("\n");
+    },
+    async run(i, ctx) {
+      if (i.end <= i.start) throw new Error("end must be after start");
+      const draft: EventDraft = {
+        accountId: await resolveAccount(i.account_id, ctx),
+        subject: i.subject,
+        start: i.start.length === 16 ? i.start + ":00" : i.start,
+        end: i.end.length === 16 ? i.end + ":00" : i.end,
+        isAllDay: i.is_all_day ?? false,
+        location: i.location ?? null,
+        body: i.body ?? null,
+        attendees: (i.attendees ?? []).map((a) => ({ name: a.name ?? "", email: a.email })),
+        isOnline: i.is_online ?? (i.attendees?.length ?? 0) > 0,
+      };
+      const ev = await api.eventCreate(draft);
+      ctx.knownEvents.set(ev.id, ev);
+      ctx.ui({ kind: "open_event", id: ev.id });
+      return { created: compactEvent(ev) };
+    },
+  }),
+  def({
+    name: "respond_to_invite",
+    description: "Accept, tentatively accept or decline a calendar invitation (by event id from list_events). Always asks the user to confirm.",
+    schema: z.object({
+      event_id: z.string(),
+      action: z.enum(["accept", "tentativelyAccept", "decline"]),
+      comment: z.string().optional().describe("Optional note to the organizer"),
+      send_response: z.boolean().optional().describe("Send the response to the organizer (default true)"),
+      account_id: AccountId,
+    }),
+    approval: "always",
+    label: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      const verb = i.action === "accept" ? "Accepting" : i.action === "decline" ? "Declining" : "Tentatively accepting";
+      return e ? `${verb} “${truncate(e.subject || "(no title)", 32)}”` : `${verb} invitation`;
+    },
+    preview: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      const verb = i.action === "accept" ? "Accept" : i.action === "decline" ? "Decline" : "Tentatively accept";
+      return [
+        `${verb}: ${e ? e.subject || "(no title)" : i.event_id}`,
+        e ? `When: ${whenText(e.start, e.end, e.isAllDay)}` : "",
+        e?.organizer ? `Organizer: ${addr(e.organizer)}` : "",
+        i.comment ? `Note: ${i.comment}` : "",
+        i.send_response === false ? "No response will be sent to the organizer." : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    },
+    async run(i, ctx) {
+      const known = ctx.knownEvents.get(i.event_id);
+      const accountId = known?.accountId ?? (await resolveAccount(i.account_id, ctx));
+      await api.inviteRespond(accountId, i.event_id, i.action, i.comment ?? null, i.send_response ?? true);
+      if (known) ctx.knownEvents.set(known.id, { ...known, response: i.action === "accept" ? "accepted" : i.action === "decline" ? "declined" : "tentativelyAccepted" });
+      return `${i.action === "accept" ? "Accepted" : i.action === "decline" ? "Declined" : "Tentatively accepted"}.`;
     },
   }),
 ];

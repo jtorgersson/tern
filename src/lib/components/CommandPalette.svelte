@@ -2,6 +2,7 @@
   import { app, CATEGORY_META, SMART_CATEGORIES, wkLabel, type UiView } from "$lib/state/app.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { agent } from "$lib/state/agent.svelte";
+  import { calendar } from "$lib/state/calendar.svelte";
   import { fuzzyScore } from "$lib/util/fuzzy";
   import type { WellKnownFolder } from "$lib/types";
   import { tick } from "svelte";
@@ -29,6 +30,10 @@
   });
 
   const go = (v: UiView) => () => app.setView(v);
+  function findTimePrefill() {
+    // Hand the agent panel a prefilled prompt; the panel picks it up via this tick.
+    app.agentPrefill = "Find 30 min with ";
+  }
 
   const commands = $derived.by<Cmd[]>(() => {
     const cmds: Cmd[] = [
@@ -43,6 +48,9 @@
       { id: "settings-look", label: "Settings: Appearance", group: "App", run: () => app.openSettings("appearance") },
       { id: "keys", label: "Keyboard shortcuts", group: "App", hint: "?", run: () => (app.cheatsheetOpen = true) },
       { id: "today", label: "Go to Today", group: "Go to", hint: "g t", run: go({ kind: "today" }) },
+      { id: "agenda", label: "Go to Calendar", group: "Go to", hint: "g c", run: go({ kind: "agenda" }) },
+      { id: "new-event", label: "New event", group: "Actions", hint: "n", run: () => calendar.openComposer() },
+      ...(app.aiReady ? [{ id: "find-time", label: "Find a time with…", group: "Actions", run: () => { app.toggleAgent(true); findTimePrefill(); } }] : []),
       { id: "flagged", label: "Go to Flagged", group: "Go to", run: go({ kind: "flagged" }) },
     ];
     const wks: WellKnownFolder[] = ["inbox", "drafts", "sentitems", "archive", "deleteditems", "junkemail"];

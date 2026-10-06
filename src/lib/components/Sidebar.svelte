@@ -17,8 +17,10 @@
     Layers,
     Plus,
     Sun,
+    CalendarDays,
   } from "@lucide/svelte";
   import { today } from "$lib/state/today.svelte";
+  import { calendar } from "$lib/state/calendar.svelte";
 
   const MAILBOXES: { wk: WellKnownFolder; icon: typeof Inbox }[] = [
     { wk: "inbox", icon: Inbox },
@@ -111,6 +113,11 @@
         <Sun size={15} />
         <span class="name">Today</span>
         {#if today.needsReply.length}<span class="count strong">{today.needsReply.length}</span>{/if}
+      </button>
+      <button class="item" class:active={isActive({ kind: "agenda" })} onclick={() => app.setView({ kind: "agenda" })}>
+        <CalendarDays size={15} />
+        <span class="name">Calendar</span>
+        {#if calendar.unanswered.length}<span class="count strong" title="Invitations awaiting your response">{calendar.unanswered.length}</span>{:else if calendar.todayMeetings.length}<span class="count">{calendar.todayMeetings.length}</span>{/if}
       </button>
       {#each MAILBOXES as m (m.wk)}
         {@const v: UiView = { kind: "unified", wellKnown: m.wk }}

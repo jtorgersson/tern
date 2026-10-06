@@ -12,6 +12,7 @@
   import MailFrame from "./MailFrame.svelte";
   import TldrCard from "./TldrCard.svelte";
   import QuickReply from "./QuickReply.svelte";
+  import InviteCard from "./InviteCard.svelte";
   import Logo from "./Logo.svelte";
   import {
     Archive,
@@ -106,6 +107,9 @@
             {#if thread.length > 1}<span class="count">{thread.length} messages</span>{/if}
           </div>
 
+          {#if m.meetingType && m.meetingType !== "none"}
+            <InviteCard message={m} />
+          {/if}
           <TldrCard {thread} message={m} />
 
           {#each thread as t (t.id)}

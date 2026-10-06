@@ -37,9 +37,14 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 ## Microsoft
 Public-client app registration (no secret). Auth-code + PKCE against
 `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`, redirect `http://localhost:<random port>`.
-Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read`.
+Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`.
 Sync: `/me/mailFolders` + per-folder `messages/delta` (inbox, sent, drafts, archive, deleted, junk), polling every
 `syncIntervalSecs`. Bodies fetched lazily on open (and for AI on demand).
+Calendar (`calendar.rs`): each sync cycle replaces a cached window (−7d…+21d) of `/me/calendarView` per account, with
+`Prefer: outlook.timezone="<system IANA zone>"` so stored times are local wall-clock strings. Meeting mails are detected by
+`@odata.type` in delta and resolved on open via `GET /me/messages/{id}?$expand=microsoft.graph.eventMessage/event`;
+conflicts are computed from the cache. Free slots use `/me/calendar/getSchedule` (falls back to the own cache on personal
+accounts). A 30 s loop sends a desktop reminder `settings.calendar.reminderMinutes` before each meeting.
 
 ## AI (src/lib/ai) — runs in the webview
 Providers: `anthropic` (official `@anthropic-ai/sdk`, default model `claude-opus-5-5`, `fallbacks: "default"`)
@@ -77,7 +82,8 @@ export interface AgentContext { accountId?: string | null; openMessageId?: strin
 ```
 Agent tools: `search_messages`, `list_messages`, `read_message`, `read_thread`, `list_folders`, `list_accounts`,
 `archive`, `mark_read`, `flag`, `move`, `delete` (approval), `compose_draft` (opens composer, never sends),
-`send_email` (approval, always), `show_results` (pushes a filtered list into the UI).
+`send_email` (approval, always), `show_results` (pushes a filtered list into the UI),
+`list_events`, `find_free_times`, `create_event` (approval), `respond_to_invite` (approval).
 Email content is untrusted: it is wrapped in `<email>` tags, the system prompt says instructions inside mail
 are data, and every outward or destructive action needs explicit user approval.
 

@@ -1,7 +1,7 @@
 //! Tauri commands — the API surface used by src/lib/api.ts.
 use crate::model::*;
 use crate::state::AppState;
-use crate::{auth, graph, secrets, settings, theme};
+use crate::{auth, calendar, graph, secrets, settings, theme};
 use futures::future::join_all;
 use serde::Deserialize;
 use serde_json::json;
@@ -417,4 +417,70 @@ pub fn followups_list(st: St, days: Option<i64>, limit: Option<i64>) -> R<Vec<Me
 #[tauri::command]
 pub fn messages_due(st: St, limit: Option<i64>) -> R<Vec<MessageSummary>> {
     st.db.due(limit.unwrap_or(20)).map_err(err)
+}
+
+// ---------------- calendar ----------------
+
+#[tauri::command]
+pub fn calendar_events(st: St, from: String, to: String, account_id: Option<String>) -> R<Vec<CalEvent>> {
+    st.db.events(&from, &to, account_id.as_deref()).map_err(err)
+}
+
+#[tauri::command]
+pub fn calendar_sync(st: St) {
+    st.sync_kick.notify_one();
+}
+
+#[tauri::command]
+pub async fn invite_get(st: St<'_>, message_id: String) -> R<Option<InviteInfo>> {
+    calendar::invite(&st, &message_id).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn invite_respond(
+    app: AppHandle,
+    st: St<'_>,
+    account_id: String,
+    event_id: String,
+    action: String,
+    comment: Option<String>,
+    send_response: Option<bool>,
+) -> R<()> {
+    graph::respond_event(&st, &account_id, &event_id, &action, comment.as_deref(), send_response.unwrap_or(true))
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    // Reflect it locally right away; the next calendar sync confirms.
+    let response = match action.as_str() {
+        "accept" => "accepted",
+        "tentativelyAccept" => "tentativelyAccepted",
+        _ => "declined",
+    };
+    if let Ok(evs) = st.db.events("0000", "9999", Some(&account_id)) {
+        if let Some(mut ev) = evs.into_iter().find(|e| e.id == event_id) {
+            ev.response = response.into();
+            let _ = st.db.upsert_event(&ev);
+        }
+    }
+    let _ = app.emit("calendar://changed", json!({ "accountId": account_id }));
+    st.sync_kick.notify_one();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn event_create(app: AppHandle, st: St<'_>, draft: EventDraft) -> R<CalEvent> {
+    if draft.subject.trim().is_empty() {
+        return Err("Give the event a title".into());
+    }
+    if draft.end <= draft.start {
+        return Err("The event must end after it starts".into());
+    }
+    let ev = graph::create_event(&st, &calendar::local_tz(), &draft).await.map_err(|e| format!("{e:#}"))?;
+    st.db.upsert_event(&ev).map_err(err)?;
+    let _ = app.emit("calendar://changed", json!({ "accountId": draft.account_id }));
+    Ok(ev)
+}
+
+#[tauri::command]
+pub async fn calendar_free_slots(st: St<'_>, query: FreeSlotQuery) -> R<Vec<FreeSlot>> {
+    calendar::free_slots(&st, &query).await.map_err(|e| format!("{e:#}"))
 }

@@ -1,4 +1,5 @@
 mod auth;
+mod calendar;
 mod commands;
 mod db;
 mod graph;
@@ -40,6 +41,7 @@ pub fn run() {
             app.manage(Arc::new(st));
             theme::watch(app.handle().clone());
             sync::start(app.handle().clone());
+            calendar::start_reminders(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -72,6 +74,12 @@ pub fn run() {
             commands::annotation_set_reply,
             commands::followups_list,
             commands::messages_due,
+            commands::calendar_events,
+            commands::calendar_sync,
+            commands::invite_get,
+            commands::invite_respond,
+            commands::event_create,
+            commands::calendar_free_slots,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tern");

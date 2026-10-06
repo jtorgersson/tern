@@ -7,11 +7,12 @@
   import { errMsg } from "$lib/util/misc";
   import type { AiProvider } from "$lib/types";
   import ProviderEditor from "./ProviderEditor.svelte";
-  import { X, Users, Sparkles, Palette, PenLine, RefreshCw, Plus, Trash2, Pencil, LoaderCircle, Check } from "@lucide/svelte";
+  import { X, Users, Sparkles, Palette, PenLine, RefreshCw, Plus, Trash2, Pencil, LoaderCircle, Check, CalendarDays } from "@lucide/svelte";
 
   const SECTIONS = [
     { id: "accounts", label: "Accounts", icon: Users },
     { id: "ai", label: "AI", icon: Sparkles },
+    { id: "calendar", label: "Calendar", icon: CalendarDays },
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "signatures", label: "Signatures", icon: PenLine },
     { id: "sync", label: "Sync", icon: RefreshCw },
@@ -219,6 +220,31 @@
               <span class="hint">Helps Tern prioritise and write like you.</span>
             </label>
           {/if}
+        {:else if app.settingsSection === "calendar"}
+          <h2>Calendar</h2>
+          <p class="lead">Your Outlook calendar shows up on Today and in the Calendar view, and the agent can find times and send invitations.</p>
+          <div class="opt-row">
+            <div><b>Meeting reminder</b><span class="hint">Desktop notification before a meeting starts</span></div>
+            <div class="seg">
+              {#each [0, 2, 5, 10, 15] as n}
+                <button class:on={(s.calendar?.reminderMinutes ?? 5) === n} onclick={() => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), reminderMinutes: n }))}>
+                  {n === 0 ? "Off" : `${n} min`}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <h3>Working hours</h3>
+          <p class="hint">Used when Tern looks for free time — for you and for the agent's proposals.</p>
+          <div class="grid2">
+            <label>
+              <span class="label">Start</span>
+              <input type="time" class="field mono" value={s.calendar?.workStart ?? "09:00"} onchange={(e) => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), workStart: (e.currentTarget as HTMLInputElement).value || "09:00" }))} />
+            </label>
+            <label>
+              <span class="label">End</span>
+              <input type="time" class="field mono" value={s.calendar?.workEnd ?? "17:00"} onchange={(e) => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), workEnd: (e.currentTarget as HTMLInputElement).value || "17:00" }))} />
+            </label>
+          </div>
         {:else if app.settingsSection === "appearance"}
           <h2>Appearance</h2>
           <p class="lead">Colors follow your Omarchy theme{app.theme ? ` (${app.theme.name})` : ""} and update live when you switch.</p>

@@ -3,6 +3,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Account,
+  CalEvent,
+  EventDraft,
+  FreeSlot,
+  FreeSlotQuery,
+  InviteAction,
+  InviteInfo,
   Annotation,
   Bootstrap,
   Contact,
@@ -68,4 +74,17 @@ export const api = {
   followups: (days = 14, limit = 50) => invoke<MessageSummary[]>("followups_list", { days, limit }),
   /** Inbox messages with a triage deadline, soonest first (includes overdue up to 7 days). */
   due: (limit = 20) => invoke<MessageSummary[]>("messages_due", { limit }),
+
+  // ---- Calendar (cached window: 7 days back … 21 days ahead, refreshed every sync) ----
+  /** Events with start < to and end > from (local ISO bounds), sorted by start. */
+  calendarEvents: (from: string, to: string, accountId?: string | null) =>
+    invoke<CalEvent[]>("calendar_events", { from, to, accountId: accountId ?? null }),
+  /** Kick a calendar refresh now (resolves immediately; listen for calendar://changed). */
+  calendarSync: () => invoke<void>("calendar_sync"),
+  /** Invitation details for a meeting-request message; null if it isn't one. Fetches from Graph. */
+  inviteGet: (messageId: string) => invoke<InviteInfo | null>("invite_get", { messageId }),
+  inviteRespond: (accountId: string, eventId: string, action: InviteAction, comment: string | null, sendResponse = true) =>
+    invoke<void>("invite_respond", { accountId, eventId, action, comment, sendResponse }),
+  eventCreate: (draft: EventDraft) => invoke<CalEvent>("event_create", { draft }),
+  freeSlots: (query: FreeSlotQuery) => invoke<FreeSlot[]>("calendar_free_slots", { query }),
 };

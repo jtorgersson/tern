@@ -1,6 +1,7 @@
 // Global keyboard map. Single-key shortcuts are ignored while typing.
 import { app } from "$lib/state/app.svelte";
 import { composer } from "$lib/state/composer.svelte";
+import { calendar } from "$lib/state/calendar.svelte";
 
 export interface Shortcut {
   keys: string;
@@ -12,6 +13,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "j / k", label: "Next / previous message", group: "Navigate" },
   { keys: "Enter / o", label: "Open message", group: "Navigate" },
   { keys: "g t", label: "Go to Today", group: "Navigate" },
+  { keys: "g c", label: "Go to Calendar", group: "Navigate" },
   { keys: "g i", label: "Go to inbox", group: "Navigate" },
   { keys: "g s", label: "Go to sent", group: "Navigate" },
   { keys: "g d", label: "Go to drafts", group: "Navigate" },
@@ -83,6 +85,11 @@ export function handleKey(e: KeyboardEvent) {
       (e.target as HTMLElement).blur?.();
       composer.minimized = true;
     }
+    else if (calendar.composerOpen && (!isTyping(e) || (e.target as HTMLElement).closest("[data-event-composer]"))) {
+      (e.target as HTMLElement).blur?.();
+      calendar.closeComposer();
+    }
+    else if (calendar.detailsId && !isTyping(e)) calendar.openDetails(null);
     else if (app.agentOpen && !isTyping(e)) app.agentOpen = false;
     else if (isTyping(e)) (e.target as HTMLElement).blur();
     else if (app.checked.size) app.checked = new Set();
@@ -103,6 +110,7 @@ export function handleKey(e: KeyboardEvent) {
       d: () => app.setView({ kind: "unified", wellKnown: "drafts" }),
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
       t: () => app.setView({ kind: "today" }),
+      c: () => app.setView({ kind: "agenda" }),
       x: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),
       f: () => app.setView({ kind: "flagged" }),
       r: () => app.setView({ kind: "category", category: "needs_reply" }),
@@ -110,6 +118,32 @@ export function handleKey(e: KeyboardEvent) {
     if (map[e.key]) {
       e.preventDefault();
       map[e.key]();
+    }
+    return;
+  }
+
+  if (app.view.kind === "agenda") {
+    const cal: Record<string, () => void> = {
+      j: () => calendar.moveSelection(1),
+      ArrowDown: () => calendar.moveSelection(1),
+      k: () => calendar.moveSelection(-1),
+      ArrowUp: () => calendar.moveSelection(-1),
+      Enter: () => calendar.selectedId && calendar.openDetails(calendar.detailsId ? null : calendar.selectedId),
+      o: () => calendar.selectedId && calendar.openDetails(calendar.selectedId),
+      n: () => calendar.openComposer(),
+      c: () => composer.compose(),
+      a: () => app.toggleAgent(true),
+      "/": () => app.searchFocusTick++,
+      "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
+      g: () => {
+        pendingG = true;
+        gTimer = setTimeout(() => (pendingG = false), 900);
+      },
+    };
+    const fn = cal[e.key];
+    if (fn) {
+      e.preventDefault();
+      fn();
     }
     return;
   }

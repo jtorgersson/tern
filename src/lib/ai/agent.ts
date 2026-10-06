@@ -1,6 +1,6 @@
 // AgentSession: a multi-turn, tool-using conversation with approval gates.
 import { api } from "../api";
-import type { Account, MessageSummary, MessageView, OutgoingMessage } from "../types";
+import type { Account, CalEvent, MessageSummary, MessageView, OutgoingMessage } from "../types";
 import type { AgentDriver, ToolCall, ToolResult } from "./backend";
 import { settings } from "./config";
 import { friendlyError, isAbort } from "./errors";
@@ -20,7 +20,8 @@ export type AgentEvent =
       action:
         | { kind: "open_message"; id: string }
         | { kind: "compose"; draft: Partial<OutgoingMessage> }
-        | { kind: "show_results"; title: string; ids: string[] };
+        | { kind: "show_results"; title: string; ids: string[] }
+        | { kind: "open_event"; id: string };
     }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -40,6 +41,7 @@ export class AgentSession {
   private controller: AbortController | null = null;
   private approvals = new Map<string, (ok: boolean) => void>();
   private known = new Map<string, MessageSummary>();
+  private knownEvents = new Map<string, CalEvent>();
   private busy = false;
   private wroteText = false;
 
@@ -98,6 +100,7 @@ export class AgentSession {
     this.driver = null;
     this.driverKey = "";
     this.known.clear();
+    this.knownEvents.clear();
   }
 
   private emit(e: AgentEvent) {
@@ -119,6 +122,7 @@ export class AgentSession {
       ui: (action) => this.emit({ type: "ui", action }),
       accounts: async () => accounts,
       known: this.known,
+      knownEvents: this.knownEvents,
       defaultAccountId: this.opts.context?.().accountId ?? accounts[0]?.id ?? null,
     };
 
@@ -213,7 +217,12 @@ export class AgentSession {
 
   private async contextBlock(accounts: Account[]): Promise<string> {
     const c = this.opts.context?.() ?? {};
-    const lines = [`Now: ${nowLine()}`, `Accounts: ${accountsLine(accounts) || "(none)"}`];
+    const cal = settings().calendar;
+    const lines = [
+      `Now: ${nowLine()}`,
+      `Working hours: ${cal?.workStart ?? "09:00"}–${cal?.workEnd ?? "17:00"} local time (tool times are local ISO without offset)`,
+      `Accounts: ${accountsLine(accounts) || "(none)"}`,
+    ];
     if (c.view) lines.push(`Current view: ${describeView(c.view)}`);
     if (c.accountId) lines.push(`Current account: ${c.accountId}`);
     if (c.openMessageId) {
@@ -235,6 +244,7 @@ export class AgentSession {
 function describeView(v: MessageView): string {
   switch (v.kind) {
     case "today": return "Today (briefing / proactive overview)";
+    case "agenda": return "Calendar agenda (next 7 days)";
     case "folder": return `folder ${v.folderId}`;
     case "unified": return `${v.wellKnown} (all accounts)`;
     case "flagged": return "flagged";

@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS messages (
   has_attachments INTEGER NOT NULL DEFAULT 0,
   importance TEXT NOT NULL DEFAULT 'normal',
   web_link TEXT,
-  is_draft INTEGER NOT NULL DEFAULT 0
+  is_draft INTEGER NOT NULL DEFAULT 0,
+  meeting_type TEXT
 );
 CREATE INDEX IF NOT EXISTS messages_folder_date ON messages(folder_id, received_at DESC);
 CREATE INDEX IF NOT EXISTS messages_account_date ON messages(account_id, received_at DESC);
@@ -97,6 +98,29 @@ CREATE TABLE IF NOT EXISTS sync_state (
   PRIMARY KEY (account_id, folder_id)
 );
 
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  subject TEXT NOT NULL DEFAULT '',
+  start_local TEXT NOT NULL,
+  end_local TEXT NOT NULL,
+  tz TEXT NOT NULL,
+  is_all_day INTEGER NOT NULL DEFAULT 0,
+  is_cancelled INTEGER NOT NULL DEFAULT 0,
+  location TEXT,
+  organizer_json TEXT,
+  attendees_json TEXT NOT NULL DEFAULT '[]',
+  response TEXT NOT NULL DEFAULT 'none',
+  show_as TEXT NOT NULL DEFAULT 'busy',
+  is_online INTEGER NOT NULL DEFAULT 0,
+  join_url TEXT,
+  web_link TEXT,
+  preview TEXT NOT NULL DEFAULT '',
+  series_master_id TEXT,
+  response_requested INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS events_acc_start ON events(account_id, start_local);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   subject, sender, preview, body,
   content = '', contentless_delete = 1,
@@ -112,12 +136,18 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has {
         conn.execute_batch("ALTER TABLE annotations ADD COLUMN suggested_reply TEXT")?;
     }
+    let has: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'meeting_type'")?
+        .exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN meeting_type TEXT")?;
+    }
     Ok(())
 }
 
 const SUMMARY_COLS: &str = "m.id, m.account_id, m.folder_id, m.conversation_id, m.subject, m.from_name, m.from_email, \
   m.to_json, m.preview, m.received_at, m.is_read, m.is_flagged, m.has_attachments, m.importance, \
-  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply";
+  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply, m.meeting_type";
 
 fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
     let id: String = r.get(0)?;
@@ -149,6 +179,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
         is_flagged: r.get::<_, i64>(11)? != 0,
         has_attachments: r.get::<_, i64>(12)? != 0,
         importance: r.get(13)?,
+        meeting_type: r.get(21)?,
         ai,
     })
 }
@@ -185,6 +216,7 @@ pub struct IncomingMessage {
     pub importance: String,
     pub web_link: Option<String>,
     pub is_draft: bool,
+    pub meeting_type: Option<String>,
 }
 
 pub struct StoredBody {
@@ -399,14 +431,15 @@ impl Db {
             let mut exists = tx.prepare("SELECT rowid FROM messages WHERE id = ?")?;
             let mut ins = tx.prepare(
                 "INSERT INTO messages (id, account_id, folder_id, conversation_id, subject, from_name, from_email,
-                   to_json, cc_json, preview, received_at, is_read, is_flagged, has_attachments, importance, web_link, is_draft)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                   to_json, cc_json, preview, received_at, is_read, is_flagged, has_attachments, importance, web_link, is_draft, meeting_type)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
                  ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id, conversation_id=excluded.conversation_id,
                    subject=excluded.subject, from_name=excluded.from_name, from_email=excluded.from_email,
                    to_json=excluded.to_json, cc_json=excluded.cc_json, preview=excluded.preview,
                    received_at=excluded.received_at, is_read=excluded.is_read, is_flagged=excluded.is_flagged,
                    has_attachments=excluded.has_attachments, importance=excluded.importance,
-                   web_link=excluded.web_link, is_draft=excluded.is_draft",
+                   web_link=excluded.web_link, is_draft=excluded.is_draft,
+                   meeting_type=COALESCE(excluded.meeting_type, messages.meeting_type)",
             )?;
             let mut fts_del = tx.prepare("DELETE FROM messages_fts WHERE rowid = ?")?;
             let mut fts_ins = tx.prepare(
@@ -439,6 +472,7 @@ impl Db {
                     m.importance,
                     m.web_link,
                     m.is_draft as i64,
+                    m.meeting_type,
                 ])?;
                 let rowid: i64 = tx.query_row("SELECT rowid FROM messages WHERE id = ?", [&m.id], |r| r.get(0))?;
                 fts_del.execute([rowid])?;
@@ -693,6 +727,92 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn set_meeting_type(&self, id: &str, meeting_type: &str) -> Result<()> {
+        let c = self.conn();
+        c.execute("UPDATE messages SET meeting_type = ? WHERE id = ?", params![meeting_type, id])?;
+        Ok(())
+    }
+
+    // ---------- events ----------
+    /// Replaces every cached event of the account whose start falls in [from, to) with `events`.
+    pub fn replace_events(&self, account_id: &str, from: &str, to: &str, events: &[CalEvent]) -> Result<()> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute(
+            "DELETE FROM events WHERE account_id = ?1 AND start_local >= ?2 AND start_local < ?3",
+            params![account_id, from, to],
+        )?;
+        {
+            let mut st = tx.prepare(
+                "INSERT OR REPLACE INTO events (id, account_id, subject, start_local, end_local, tz, is_all_day, is_cancelled,
+                   location, organizer_json, attendees_json, response, show_as, is_online, join_url, web_link, preview,
+                   series_master_id, response_requested)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            )?;
+            for e in events {
+                st.execute(params![
+                    e.id, account_id, e.subject, e.start, e.end, e.time_zone, e.is_all_day as i64, e.is_cancelled as i64,
+                    e.location, e.organizer.as_ref().map(serde_json::to_string).transpose()?,
+                    serde_json::to_string(&e.attendees)?, e.response, e.show_as, e.is_online as i64, e.join_url,
+                    e.web_link, e.preview, e.series_master_id, e.response_requested as i64
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_event(&self, e: &CalEvent) -> Result<()> {
+        self.replace_events(&e.account_id, &e.start, &e.start, std::slice::from_ref(e))
+    }
+
+    /// Events overlapping [from, to) (local wall-clock strings), sorted by start.
+    pub fn events(&self, from: &str, to: &str, account_id: Option<&str>) -> Result<Vec<CalEvent>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, account_id, subject, start_local, end_local, tz, is_all_day, is_cancelled, location, organizer_json,
+                    attendees_json, response, show_as, is_online, join_url, web_link, preview, series_master_id, response_requested
+             FROM events WHERE start_local < ?1 AND end_local > ?2 AND (?3 IS NULL OR account_id = ?3)
+             ORDER BY start_local, end_local",
+        )?;
+        let rows = st
+            .query_map(params![to, from, account_id], |r| {
+                Ok(CalEvent {
+                    id: r.get(0)?,
+                    account_id: r.get(1)?,
+                    subject: r.get(2)?,
+                    start: r.get(3)?,
+                    end: r.get(4)?,
+                    time_zone: r.get(5)?,
+                    is_all_day: r.get::<_, i64>(6)? != 0,
+                    is_cancelled: r.get::<_, i64>(7)? != 0,
+                    location: r.get(8)?,
+                    organizer: r.get::<_, Option<String>>(9)?.and_then(|s| serde_json::from_str(&s).ok()),
+                    attendees: serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default(),
+                    response: r.get(11)?,
+                    show_as: r.get(12)?,
+                    is_online: r.get::<_, i64>(13)? != 0,
+                    join_url: r.get(14)?,
+                    web_link: r.get(15)?,
+                    preview: r.get(16)?,
+                    series_master_id: r.get(17)?,
+                    response_requested: r.get::<_, i64>(18)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Events on the same account that collide with `ev` and actually block time.
+    pub fn conflicts(&self, ev: &CalEvent) -> Result<Vec<CalEvent>> {
+        let all = self.events(&ev.start, &ev.end, Some(&ev.account_id))?;
+        Ok(all
+            .into_iter()
+            .filter(|e| e.id != ev.id && !e.is_cancelled && !e.is_all_day && e.response != "declined" && e.show_as != "free")
+            .filter(|e| e.series_master_id.is_none() || e.series_master_id != ev.series_master_id)
+            .collect())
+    }
+
     // ---------- bodies ----------
     pub fn body(&self, id: &str) -> Result<Option<StoredBody>> {
         let c = self.conn();
@@ -791,6 +911,7 @@ mod tests {
             importance: "normal".into(),
             web_link: None,
             is_draft: false,
+            meeting_type: None,
         }
     }
 
@@ -890,6 +1011,44 @@ mod tests {
         // removing the account cascades
         db.remove_account("a1").unwrap();
         assert!(db.list(&q(MessageView::Search { query: "quart".into() })).unwrap().is_empty());
+    }
+
+    fn ev(id: &str, start: &str, end: &str) -> CalEvent {
+        CalEvent {
+            id: id.into(), account_id: "a1".into(), subject: id.into(), start: start.into(), end: end.into(),
+            time_zone: "Europe/Stockholm".into(), is_all_day: false, is_cancelled: false, location: None, organizer: None,
+            attendees: vec![], response: "accepted".into(), show_as: "busy".into(), is_online: false, join_url: None,
+            web_link: None, preview: String::new(), series_master_id: None, response_requested: true,
+        }
+    }
+
+    #[test]
+    fn events_window_and_conflicts() {
+        let db = mem();
+        seed(&db);
+        db.replace_events("a1", "2026-10-05T00:00:00", "2026-10-12T00:00:00", &[
+            ev("standup", "2026-10-06T09:00:00", "2026-10-06T09:15:00"),
+            ev("board", "2026-10-06T10:00:00", "2026-10-06T11:00:00"),
+            ev("lunch", "2026-10-06T12:00:00", "2026-10-06T13:00:00"),
+        ]).unwrap();
+        // a later re-sync of the same window drops events that disappeared and keeps order
+        db.replace_events("a1", "2026-10-05T00:00:00", "2026-10-12T00:00:00", &[
+            ev("board", "2026-10-06T10:00:00", "2026-10-06T11:00:00"),
+            ev("lunch", "2026-10-06T12:00:00", "2026-10-06T13:00:00"),
+        ]).unwrap();
+        let day: Vec<String> = db.events("2026-10-06T00:00:00", "2026-10-07T00:00:00", None).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(day, vec!["board", "lunch"]);
+        // overlap query is half-open: an event ending exactly at `from` is excluded
+        assert!(db.events("2026-10-06T11:00:00", "2026-10-06T12:00:00", None).unwrap().is_empty());
+
+        let invite = ev("invite", "2026-10-06T10:30:00", "2026-10-06T12:30:00");
+        let c: Vec<String> = db.conflicts(&invite).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(c, vec!["board", "lunch"]);
+        // declined / free / cancelled events don't count as conflicts
+        let mut free = ev("focus", "2026-10-06T10:00:00", "2026-10-06T12:00:00");
+        free.show_as = "free".into();
+        db.upsert_event(&free).unwrap();
+        assert_eq!(db.conflicts(&invite).unwrap().len(), 2);
     }
 
     fn at(hours_ago: i64) -> String {

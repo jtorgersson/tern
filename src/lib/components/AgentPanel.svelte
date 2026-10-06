@@ -34,7 +34,9 @@
         `Find everything else from ${who}`,
       );
     } else if (app.view.kind === "today") {
-      out.push("Plan my inbox for today", "What's the most urgent thing right now?", "Who is waiting on me, and for how long?");
+      out.push("Plan my inbox for today", "What's my next meeting about?", "Find 30 min with Marcus this week", "Who is waiting on me, and for how long?");
+    } else if (app.view.kind === "agenda") {
+      out.push("Find 30 min with Marcus this week", "What's my next meeting about?", "Clear my Friday afternoon — propose what to move", "Which invitations haven't I answered?");
     } else if (app.view.kind === "search") {
       out.push(`Dig deeper: find mail about “${app.view.query}”`, "Summarize these results");
     } else if (app.view.kind === "category") {
@@ -48,6 +50,16 @@
 
   $effect(() => {
     if (app.agentOpen) tick().then(() => input?.focus());
+  });
+  $effect(() => {
+    if (app.agentPrefill != null) {
+      text = app.agentPrefill;
+      app.agentPrefill = null;
+      tick().then(() => {
+        input?.focus();
+        autosize();
+      });
+    }
   });
 
   // Auto-scroll as content streams in.

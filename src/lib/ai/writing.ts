@@ -1,5 +1,5 @@
 // Streaming writing helpers: thread summary, reply drafting, rewriting, daily briefing.
-import type { Account, MessageFull, MessageSummary } from "../types";
+import type { Account, CalEvent, MessageFull, MessageSummary } from "../types";
 import type { Backend, Effort } from "./backend";
 import { settings } from "./config";
 import { AiError, friendlyError, isAbort } from "./errors";
@@ -58,6 +58,19 @@ export interface BriefingInput {
   waiting: MessageSummary[];
   /** Inbox mail with a triage deadline. */
   due: MessageSummary[];
+  /** Today's and tomorrow's calendar events (optional). */
+  events?: CalEvent[];
+}
+
+function eventLine(e: CalEvent): string {
+  const when = e.isAllDay ? `${e.start.slice(0, 10)} all day` : `${e.start.slice(0, 16).replace("T", " ")}–${e.end.slice(11, 16)}`;
+  const flags = [
+    e.isCancelled ? "cancelled" : "",
+    e.response === "notResponded" ? "NOT RESPONDED" : e.response === "tentativelyAccepted" ? "tentative" : e.response === "declined" ? "declined" : "",
+    e.isOnline ? "online" : "",
+  ].filter(Boolean);
+  const who = e.organizer ? ` (organizer ${e.organizer.name || e.organizer.email})` : "";
+  return `- ${when} — ${e.subject || "(no title)"}${who}${e.location ? ` @ ${e.location}` : ""}${flags.length ? ` [${flags.join(", ")}]` : ""}`;
 }
 
 function describe(m: MessageSummary, key: string): string {
@@ -79,6 +92,9 @@ export function briefing(input: BriefingInput, signal?: AbortSignal): AsyncGener
       `Mail the user sent that has not been answered yet (${input.waiting.length}):\n\n` +
         input.waiting.map((m, i) => sentBlock(m, `sent${i + 1}`)).join("\n\n"),
     );
+  }
+  if (input.events?.length) {
+    parts.push(`Calendar for today and tomorrow (${input.events.length} events, local time):\n` + input.events.map(eventLine).join("\n"));
   }
   if (input.due.length) {
     parts.push(

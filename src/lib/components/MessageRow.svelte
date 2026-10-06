@@ -5,7 +5,7 @@
   import { shortTime } from "$lib/util/time";
   import { displayName } from "$lib/util/misc";
   import Avatar from "./Avatar.svelte";
-  import { Paperclip, Star, Archive, Trash2, Mail, MailOpen, Sparkles, Check } from "@lucide/svelte";
+  import { Paperclip, Star, Archive, Trash2, Mail, MailOpen, Sparkles, Check, CalendarDays } from "@lucide/svelte";
 
   let {
     m,
@@ -62,6 +62,7 @@
       <span class="from">{isSentView ? "To: " : ""}{displayName(who)}</span>
       {#if m.importance === "high" || m.ai?.priority === 3}<span class="prio" title="High priority">!</span>{/if}
       <span class="spacer"></span>
+      {#if m.meetingType && m.meetingType !== "none"}<CalendarDays size={12} class="meta-ic cal" />{/if}
       {#if m.hasAttachments}<Paperclip size={12} class="meta-ic" />{/if}
       {#if m.isFlagged}<Star size={12} class="flag" fill="currentColor" />{/if}
       <span class="time mono">{shortTime(m.receivedAt)}</span>

@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-pub const SCOPES: &str = "offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read";
+pub const SCOPES: &str = "offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite";
 
 #[derive(Deserialize)]
 struct TokenResponse {

@@ -8,7 +8,8 @@ AI-native, keyboard-first mail for Omarchy. It's built with Tauri 2, Rust, and S
   - Triage sorts mail into *Needs reply / Action / FYI / Newsletters / Notifications / Receipts*.
   - It also writes thread TL;DRs, drafts replies in your voice, and rewrites text.
   - A **Today** view opens with a streamed briefing of what matters, replies Tern drafted ahead of time for mail that needs an answer, mail you sent that nobody answered yet (with one-click nudges), and deadlines it spotted.
-  - An **agent** (`Ctrl+J`) can search, read, archive, flag, move and draft for you. Sending and deleting always ask first.
+  - **Calendar:** your day on the Today view, a week agenda (`g c`), invitation cards with Accept / Tentative / Decline that warn about conflicts, meeting reminders with a Join button, and an agent that finds free times across attendees and creates events (with your approval).
+  - An **agent** (`Ctrl+J`) can search, read, archive, flag, move, draft, schedule and respond to invites for you. Sending, deleting, creating events and responding to invitations always ask first.
 - **AI providers:** Anthropic (Claude, default `claude-opus-5-5`) or any OpenAI-compatible API (OpenAI, Ollama, LM Studio, OpenRouter, Groq…). Keys live in gnome-keyring.
 - **Local-first:** SQLite cache with full-text search at `~/.local/share/tern/tern.db`. Settings are in `~/.config/tern/settings.json`.
 
@@ -21,7 +22,7 @@ Tern is a *public client*, so it has no secret. You need a client ID from an Ent
    **Supported account types:** *Accounts in any organizational directory and personal Microsoft accounts*. This lets one client ID serve every M365 tenant and Outlook.com. Pick *single tenant* if your IT prefers.
 3. **Redirect URI:** platform **Public client/native (mobile & desktop)**, value `http://localhost`. Tern listens on a random loopback port; Entra allows any port for `http://localhost`.
 4. Open **Authentication** and set **Allow public client flows** to **Yes**. Save.
-5. Under **API permissions → Add → Microsoft Graph → Delegated**, add: `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.Read`, `offline_access`, `openid`, `profile`, `email`.
+5. Under **API permissions → Add → Microsoft Graph → Delegated**, add: `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.Read`, `Calendars.ReadWrite`, `offline_access`, `openid`, `profile`, `email`.
    If your tenant restricts user consent, click **Grant admin consent**.
 6. Copy the **Application (client) ID**. Paste it on Tern's welcome screen, then **Sign in with Microsoft**.
 
@@ -58,7 +59,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `r` / `Shift+R` / `f` | reply / reply all / forward |
 | `c` | compose |
 | `/` | search |
-| `g t` / `g i` / `g s` / `g d` / `g x` | today / inbox / sent / drafts / trash |
+| `g t` / `g c` / `g i` / `g s` / `g d` / `g x` | today / calendar / inbox / sent / drafts / trash |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |
 | `?` | all shortcuts |

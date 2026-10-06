@@ -28,7 +28,8 @@ pub fn defaults() -> Value {
             "translucent": true
         },
         "signatures": {},
-        "syncIntervalSecs": 60
+        "syncIntervalSecs": 60,
+        "calendar": { "reminderMinutes": 5, "workStart": "09:00", "workEnd": "17:00" }
     })
 }
 
@@ -78,6 +79,15 @@ pub fn ms_client_id(s: &Value) -> String {
 pub fn ms_tenant(s: &Value) -> String {
     let t = s.pointer("/microsoft/tenant").and_then(|v| v.as_str()).unwrap_or("").trim();
     if t.is_empty() { "common".into() } else { t.into() }
+}
+
+pub fn reminder_minutes(s: &Value) -> i64 {
+    s.pointer("/calendar/reminderMinutes").and_then(|v| v.as_i64()).unwrap_or(5).clamp(0, 120)
+}
+
+pub fn work_hours(s: &Value) -> (String, String) {
+    let g = |k: &str, d: &str| s.pointer(&format!("/calendar/{k}")).and_then(|v| v.as_str()).unwrap_or(d).to_string();
+    (g("workStart", "09:00"), g("workEnd", "17:00"))
 }
 
 pub fn sync_interval(s: &Value) -> u64 {

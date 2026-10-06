@@ -46,6 +46,10 @@ pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account, include
     emit_status(app, st, &acc.id, "syncing", None);
     match sync_inner(app, st, acc, include_other_folders).await {
         Ok(()) => {
+            // Calendar problems (e.g. a mailbox without one) must not mark mail sync as failed.
+            if let Err(e) = crate::calendar::sync_account(app, st, acc).await {
+                log::warn!("calendar sync failed for {}: {e:#}", acc.email);
+            }
             let _ = st.db.set_account_status(&acc.id, "ok", None, true);
             emit_status(app, st, &acc.id, "idle", None);
         }

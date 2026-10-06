@@ -86,6 +86,8 @@ class AppState {
   settingsOpen = $state(false);
   settingsSection = $state<string>("accounts");
   cheatsheetOpen = $state(false);
+  /** Text to prefill the agent input with (consumed by the panel). */
+  agentPrefill = $state<string | null>(null);
   /** True while the first-run flow is on screen (survives the first account being added). */
   onboarding = $state(false);
   searchFocusTick = $state(0);
@@ -103,6 +105,8 @@ class AppState {
       this.accounts.length > 1 &&
       this.view.kind !== "folder",
   );
+  /** Views that replace the list + reader with a single canvas. */
+  isCanvasView = $derived(this.view.kind === "today" || this.view.kind === "agenda");
 
   private unlisten: UnlistenFn[] = [];
   private loadSeq = 0;
@@ -126,6 +130,7 @@ class AppState {
         await this.reload();
         this.refreshCounts();
         this.scheduleTriage(1500);
+        import("./calendar.svelte").then(({ calendar }) => calendar.load({ silent: true }));
         const mailto = await invoke<string | null>("take_pending_mailto");
         if (mailto) this.openMailto(mailto);
       }
@@ -165,6 +170,10 @@ class AppState {
         this.authProgress = e.payload;
       }),
       await listen<string>("app://mailto", (e) => this.openMailto(e.payload)),
+      await listen(EVENTS.calendarChanged, async () => {
+        const { calendar } = await import("./calendar.svelte");
+        calendar.load({ silent: true });
+      }),
       await listen(EVENTS.accountsChanged, async () => {
         this.accounts = await api.accounts();
         await this.refreshFolders();
@@ -309,9 +318,14 @@ class AppState {
     this.loading = true;
     try {
       let list: MessageSummary[];
-      if (this.view.kind === "today") {
-        const { today } = await import("./today.svelte");
-        await today.load();
+      if (this.view.kind === "today" || this.view.kind === "agenda") {
+        if (this.view.kind === "today") {
+          const { today } = await import("./today.svelte");
+          await today.load();
+        } else {
+          const { calendar } = await import("./calendar.svelte");
+          await calendar.load({ silent: calendar.loadedOnce });
+        }
         if (seq !== this.loadSeq) return;
         this.messages = [];
         this.hasMore = false;
@@ -356,7 +370,7 @@ class AppState {
   }
 
   async loadMore() {
-    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today") return;
+    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today" || this.view.kind === "agenda") return;
     const last = this.messages[this.messages.length - 1];
     if (!last) return;
     this.loading = true;
@@ -407,6 +421,8 @@ class AppState {
     switch (v.kind) {
       case "today":
         return "Today";
+      case "agenda":
+        return "Calendar";
       case "unified":
         return v.wellKnown === "inbox"
           ? this.accountFilter
@@ -432,7 +448,7 @@ class AppState {
 
   // ======================= selection & reader =======================
   select(id: string | null, openIt = true) {
-    if (id && this.view.kind === "today") {
+    if (id && (this.view.kind === "today" || this.view.kind === "agenda")) {
       // Leave Today for the inbox so the reader has a list to sit next to.
       this.view = { kind: "unified", wellKnown: "inbox" };
       this.reload(true).then(() => (this.selectedId = id));

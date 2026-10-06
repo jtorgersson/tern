@@ -79,7 +79,95 @@ export interface MessageSummary {
   isFlagged: boolean;
   hasAttachments: boolean;
   importance: "low" | "normal" | "high";
+  /** Set when the message is a meeting request/response (Graph eventMessage). */
+  meetingType: MeetingType | null;
   ai: Annotation | null;
+}
+
+// ---- Calendar ----
+export type MeetingType =
+  | "meetingRequest"
+  | "meetingCancelled"
+  | "meetingAccepted"
+  | "meetingTentativelyAccepted"
+  | "meetingDeclined"
+  | "none";
+
+export type EventResponse = "none" | "organizer" | "tentativelyAccepted" | "accepted" | "declined" | "notResponded";
+export type ShowAs = "free" | "tentative" | "busy" | "oof" | "workingElsewhere" | "unknown";
+
+export interface Attendee {
+  addr: Addr;
+  type: "required" | "optional" | "resource";
+  response: EventResponse;
+}
+
+/**
+ * Times are local wall-clock ISO strings WITHOUT offset ("2026-10-07T09:00:00") in `timeZone`
+ * (the system zone at sync time), so `new Date(ev.start)` is correct on this machine.
+ * All-day events use "YYYY-MM-DDT00:00:00" and `end` is the exclusive next midnight.
+ */
+export interface CalEvent {
+  id: string;
+  accountId: string;
+  subject: string;
+  start: string;
+  end: string;
+  timeZone: string;
+  isAllDay: boolean;
+  isCancelled: boolean;
+  location: string | null;
+  organizer: Addr | null;
+  attendees: Attendee[];
+  response: EventResponse;
+  showAs: ShowAs;
+  isOnline: boolean;
+  joinUrl: string | null;
+  webLink: string | null;
+  preview: string;
+  seriesMasterId: string | null;
+  responseRequested: boolean;
+}
+
+export interface InviteInfo {
+  meetingType: MeetingType;
+  /** The calendar event the invitation refers to (null if it no longer exists). */
+  event: CalEvent | null;
+  /** Other non-declined, non-free events on the same account overlapping it. */
+  conflicts: CalEvent[];
+}
+
+export type InviteAction = "accept" | "tentativelyAccept" | "decline";
+
+export interface EventDraft {
+  accountId: string;
+  subject: string;
+  start: string; // local wall-clock ISO, see CalEvent
+  end: string;
+  isAllDay?: boolean;
+  location?: string | null;
+  /** Plain text; Tern converts to HTML. */
+  body?: string | null;
+  attendees: Addr[];
+  /** Create a Teams meeting link. */
+  isOnline: boolean;
+}
+
+export interface FreeSlotQuery {
+  accountId: string;
+  /** Other people's emails to check (empty = just me). Uses getSchedule; personal accounts fall back to own calendar. */
+  attendees: string[];
+  from: string; // local ISO
+  to: string;
+  durationMins: number;
+  /** "HH:MM" bounds; defaults from settings.calendar. */
+  workStart?: string;
+  workEnd?: string;
+}
+
+export interface FreeSlot {
+  start: string;
+  end: string;
 }
 
 export interface Attachment {
@@ -105,6 +193,7 @@ export interface MessageFull extends MessageSummary {
 
 export type MessageView =
   | { kind: "today" } // briefing / proactive view (no list query)
+  | { kind: "agenda" } // 7-day calendar agenda (no list query)
   | { kind: "folder"; folderId: string }
   | { kind: "unified"; wellKnown: WellKnownFolder } // across all accounts
   | { kind: "flagged" }
@@ -180,6 +269,13 @@ export interface Settings {
   };
   signatures: Record<string, string>; // accountId -> html
   syncIntervalSecs: number;
+  calendar: {
+    /** Desktop notification this many minutes before a meeting (0 = off). */
+    reminderMinutes: number;
+    /** Working hours used for free-slot search, "HH:MM". */
+    workStart: string;
+    workEnd: string;
+  };
 }
 
 export interface Theme {
@@ -221,4 +317,5 @@ export const EVENTS = {
   themeChanged: "theme://changed",
   authProgress: "auth://progress",
   accountsChanged: "accounts://changed",
+  calendarChanged: "calendar://changed", // payload: { accountId }
 } as const;

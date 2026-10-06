@@ -1,5 +1,5 @@
 // Compact, model-friendly renderings of mail objects. Mail content is untrusted and always wrapped in <email> tags.
-import type { Account, Addr, MessageFull, MessageSummary } from "../types";
+import type { Account, Addr, CalEvent, MessageFull, MessageSummary } from "../types";
 
 export const BODY_LIMIT = 12_000;
 
@@ -98,4 +98,22 @@ export function nowLine(): string {
   const d = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return `${d.toLocaleString("sv-SE", { timeZone: tz })} (${tz}, ${d.toLocaleDateString("en-US", { weekday: "long" })})`;
+}
+
+/** Compact JSON-able event for tool results. */
+export function compactEvent(e: CalEvent) {
+  return {
+    id: e.id,
+    account: e.accountId,
+    subject: truncate(e.subject || "(no title)", 120),
+    start: e.start,
+    end: e.end,
+    allDay: e.isAllDay || undefined,
+    location: e.location || undefined,
+    online: e.isOnline || undefined,
+    organizer: e.organizer ? addr(e.organizer) : undefined,
+    attendees: e.attendees.length ? e.attendees.slice(0, 12).map((a) => `${addr(a.addr)}${a.response !== "none" ? ` (${a.response})` : ""}`) : undefined,
+    myResponse: e.response,
+    cancelled: e.isCancelled || undefined,
+  };
 }

@@ -2,6 +2,8 @@
   // Today: briefing + proactive cards. Replaces list + reader while active.
   import { app } from "$lib/state/app.svelte";
   import { today } from "$lib/state/today.svelte";
+  import { calendar } from "$lib/state/calendar.svelte";
+  import DaySchedule from "./DaySchedule.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { agent } from "$lib/state/agent.svelte";
   import { api } from "$lib/api";
@@ -49,6 +51,8 @@
     parts.push(`${today.unreadCount} unread`);
     if (today.needsReply.length) parts.push(`${today.needsReply.length} need${today.needsReply.length === 1 ? "s" : ""} a reply`);
     if (today.visibleWaiting.length) parts.push(`${today.visibleWaiting.length} waiting on others`);
+    if (calendar.todayMeetings.length) parts.push(`${calendar.todayMeetings.length} meeting${calendar.todayMeetings.length === 1 ? "" : "s"}`);
+    if (calendar.unanswered.length) parts.push(`${calendar.unanswered.length} invite${calendar.unanswered.length === 1 ? "" : "s"} to answer`);
     if (today.overdue.length) parts.push(`${today.overdue.length} overdue`);
     return parts.join(" · ");
   });
@@ -129,6 +133,9 @@
         <div class="hero-mark"><Logo size={44} /></div>
       </header>
 
+      <!-- Your day -->
+      <DaySchedule />
+
       <!-- Briefing -->
       <div class="card briefing" class:busy={today.briefingBusy}>
         <div class="card-head">
@@ -180,7 +187,7 @@
             <Logo size={56} />
           </div>
           <h2>Inbox is calm</h2>
-          <p>Nothing needs a reply, nobody's waiting on you, and nothing is due. Enjoy it.</p>
+          <p>Nothing needs a reply, nobody's waiting on you, and nothing is due.{calendar.todayMeetings.length ? " Just your meetings." : " Enjoy it."}</p>
           <button class="btn" onclick={() => app.setView({ kind: "unified", wellKnown: "inbox" })}>Browse inbox <ArrowRight size={14} /></button>
         </div>
       {/if}

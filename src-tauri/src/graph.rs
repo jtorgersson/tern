@@ -143,7 +143,160 @@ fn to_incoming(account_id: &str, folder_id: &str, v: &Value) -> IncomingMessage 
         importance: v["importance"].as_str().unwrap_or("normal").to_string(),
         web_link: v["webLink"].as_str().map(String::from),
         is_draft: v["isDraft"].as_bool().unwrap_or(false),
+        meeting_type: meeting_type_guess(v["@odata.type"].as_str()),
     }
+}
+
+/// Delta items only carry the OData type; the exact meetingMessageType is fetched on open.
+fn meeting_type_guess(odata_type: Option<&str>) -> Option<String> {
+    match odata_type? {
+        "#microsoft.graph.eventMessageRequest" => Some("meetingRequest".into()),
+        "#microsoft.graph.eventMessageResponse" => Some("meetingAccepted".into()),
+        t if t.starts_with("#microsoft.graph.eventMessage") => Some("meetingRequest".into()),
+        _ => None,
+    }
+}
+
+// ---------------- calendar ----------------
+
+const EVENT_SELECT: &str = "id,subject,start,end,isAllDay,isCancelled,location,organizer,attendees,responseStatus,showAs,\
+isOnlineMeeting,onlineMeeting,onlineMeetingUrl,webLink,bodyPreview,seriesMasterId,responseRequested";
+
+fn tz_prefer(tz: &str) -> String {
+    format!("outlook.timezone=\"{tz}\"")
+}
+
+/// Graph returns "2026-10-07T09:00:00.0000000"; keep the wall-clock part.
+fn wall(v: &Value) -> String {
+    v["dateTime"].as_str().map(|s| s.chars().take(19).collect()).unwrap_or_default()
+}
+
+pub fn parse_event(account_id: &str, tz: &str, v: &Value) -> CalEvent {
+    let attendees = v["attendees"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| Attendee {
+                    addr: addr(x),
+                    kind: x["type"].as_str().unwrap_or("required").to_string(),
+                    response: x.pointer("/status/response").and_then(|r| r.as_str()).unwrap_or("none").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let join_url = v
+        .pointer("/onlineMeeting/joinUrl")
+        .and_then(|j| j.as_str())
+        .or_else(|| v["onlineMeetingUrl"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    CalEvent {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
+        account_id: account_id.to_string(),
+        subject: v["subject"].as_str().unwrap_or("(no title)").to_string(),
+        start: wall(&v["start"]),
+        end: wall(&v["end"]),
+        time_zone: tz.to_string(),
+        is_all_day: v["isAllDay"].as_bool().unwrap_or(false),
+        is_cancelled: v["isCancelled"].as_bool().unwrap_or(false),
+        location: v.pointer("/location/displayName").and_then(|l| l.as_str()).filter(|s| !s.is_empty()).map(String::from),
+        organizer: if v["organizer"].is_object() { Some(addr(&v["organizer"])) } else { None },
+        attendees,
+        response: v.pointer("/responseStatus/response").and_then(|r| r.as_str()).unwrap_or("none").to_string(),
+        show_as: v["showAs"].as_str().unwrap_or("busy").to_string(),
+        is_online: v["isOnlineMeeting"].as_bool().unwrap_or(false) || join_url.is_some(),
+        join_url,
+        web_link: v["webLink"].as_str().map(String::from),
+        preview: v["bodyPreview"].as_str().unwrap_or("").chars().take(400).collect(),
+        series_master_id: v["seriesMasterId"].as_str().map(String::from),
+        response_requested: v["responseRequested"].as_bool().unwrap_or(true),
+    }
+}
+
+/// Expanded occurrences in [from_utc, to_utc) ("YYYY-MM-DDTHH:MM:SSZ"), times rendered in `tz`.
+pub async fn calendar_view(st: &AppState, account_id: &str, tz: &str, from_utc: &str, to_utc: &str) -> Result<Vec<CalEvent>> {
+    let mut url = format!(
+        "/me/calendarView?startDateTime={from_utc}&endDateTime={to_utc}&$select={EVENT_SELECT}&$orderby=start/dateTime&$top=250"
+    );
+    let mut out = Vec::new();
+    loop {
+        let resp = send_raw(st, account_id, Method::GET, &url, None, Some(&tz_prefer(tz))).await?;
+        let v: Value = resp.json().await?;
+        out.extend(v["value"].as_array().into_iter().flatten().map(|e| parse_event(account_id, tz, e)));
+        match v["@odata.nextLink"].as_str() {
+            Some(next) => url = next.to_string(),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+/// The eventMessage behind a meeting-related mail: (meetingMessageType, event).
+pub async fn event_message(st: &AppState, account_id: &str, tz: &str, message_id: &str) -> Result<(String, Option<CalEvent>)> {
+    let url = format!("/me/messages/{message_id}?$expand=microsoft.graph.eventMessage/event");
+    let resp = send_raw(st, account_id, Method::GET, &url, None, Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    let kind = v["meetingMessageType"].as_str().unwrap_or("none").to_string();
+    let event = v.get("event").filter(|e| e.is_object() && e["id"].is_string()).map(|e| parse_event(account_id, tz, e));
+    Ok((kind, event))
+}
+
+pub async fn respond_event(st: &AppState, account_id: &str, event_id: &str, action: &str, comment: Option<&str>, send: bool) -> Result<()> {
+    if !matches!(action, "accept" | "tentativelyAccept" | "decline") {
+        bail!("unknown response {action}");
+    }
+    let mut body = json!({ "sendResponse": send });
+    if let Some(c) = comment.filter(|c| !c.trim().is_empty()) {
+        body["comment"] = json!(c);
+    }
+    call(st, account_id, Method::POST, &format!("/me/events/{event_id}/{action}"), Some(&body)).await?;
+    Ok(())
+}
+
+pub async fn create_event(st: &AppState, tz: &str, d: &EventDraft) -> Result<CalEvent> {
+    let mut body = json!({
+        "subject": d.subject,
+        "start": { "dateTime": d.start, "timeZone": tz },
+        "end": { "dateTime": d.end, "timeZone": tz },
+        "isAllDay": d.is_all_day,
+        "attendees": d.attendees.iter().map(|a| json!({
+            "emailAddress": { "address": a.email, "name": if a.name.is_empty() { &a.email } else { &a.name } },
+            "type": "required"
+        })).collect::<Vec<_>>(),
+    });
+    if let Some(l) = d.location.as_deref().filter(|l| !l.trim().is_empty()) {
+        body["location"] = json!({ "displayName": l });
+    }
+    if let Some(t) = d.body.as_deref().filter(|t| !t.trim().is_empty()) {
+        body["body"] = json!({ "contentType": "text", "content": t });
+    }
+    if d.is_online {
+        body["isOnlineMeeting"] = json!(true);
+        body["onlineMeetingProvider"] = json!("teamsForBusiness");
+    }
+    let resp = send_raw(st, &d.account_id, Method::POST, "/me/events", Some(&body), Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    Ok(parse_event(&d.account_id, tz, &v))
+}
+
+/// Free/busy for `emails` as availabilityView strings (one digit per `interval` minutes from `from`).
+/// Not available for personal Microsoft accounts.
+pub async fn get_schedule(st: &AppState, account_id: &str, tz: &str, emails: &[String], from: &str, to: &str, interval: i64) -> Result<Vec<String>> {
+    let body = json!({
+        "schedules": emails,
+        "startTime": { "dateTime": from, "timeZone": tz },
+        "endTime": { "dateTime": to, "timeZone": tz },
+        "availabilityViewInterval": interval
+    });
+    let resp = send_raw(st, account_id, Method::POST, "/me/calendar/getSchedule", Some(&body), Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    Ok(v["value"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| s.get("error").is_none())
+        .filter_map(|s| s["availabilityView"].as_str().map(String::from))
+        .collect())
 }
 
 // ---------------- folders ----------------
