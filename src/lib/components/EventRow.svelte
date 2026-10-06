@@ -4,9 +4,8 @@
   import { app } from "$lib/state/app.svelte";
   import type { CalEvent, InviteAction } from "$lib/types";
   import { hm, isNow, isPast, untilLabel, durationLabel } from "$lib/util/cal";
-  import { hueColor } from "$lib/theme";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Video, MapPin, Users, Check, CircleHelp, CircleAlert, Ban, Crown, ArrowRight } from "@lucide/svelte";
+  import { Video, MapPin, Users, Check, CircleHelp, CircleAlert, Ban, Crown, ArrowRight, Repeat } from "@lucide/svelte";
 
   let {
     ev,
@@ -21,7 +20,6 @@
   const live = $derived(!ev.isAllDay && isNow(ev, now));
   const canRespond = $derived(ev.response !== "organizer" && !ev.isCancelled && !past && ev.organizer != null);
   const needsResponse = $derived(canRespond && ev.response === "notResponded");
-  const acct = $derived(app.accountById.get(ev.accountId));
   const others = $derived(ev.attendees.filter((a) => a.type !== "resource").length);
   const selected = $derived(calendar.selectedId === ev.id);
   let busy = $state<InviteAction | null>(null);
@@ -67,7 +65,7 @@
       <span class="t2">{hm(ev.end)}</span>
     {/if}
   </div>
-  <span class="bar" style:background={showAccount && acct ? hueColor(acct.hue, app.mode) : undefined}></span>
+  <span class="bar" style:background={calendar.colorOf(ev)}></span>
   <div class="main">
     <div class="l1">
       <span class="title">{ev.subject || "(no title)"}</span>
@@ -89,6 +87,7 @@
     </div>
     <div class="l2">
       {#if !ev.isAllDay}<span class="dur">{durationLabel(ev.start, ev.end)}</span>{/if}
+      {#if ev.seriesMasterId}<span class="meta" title="Repeats"><Repeat size={11} /></span>{/if}
       {#if ev.isOnline}
         <span class="meta teams"><Video size={11} /> Teams</span>
       {:else if ev.location}

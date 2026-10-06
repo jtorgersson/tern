@@ -25,11 +25,22 @@ pub fn defaults() -> Value {
             "density": "comfortable",
             "remoteImages": "ask",
             "mailRendering": "adaptive",
-            "translucent": true
+            "translucent": true,
+            "locale": "en-GB"
         },
         "signatures": {},
         "syncIntervalSecs": 60,
-        "calendar": { "reminderMinutes": 5, "workStart": "09:00", "workEnd": "17:00" }
+        "calendar": {
+            "reminderMinutes": 5,
+            "workStart": "09:00",
+            "workEnd": "17:00",
+            "defaultDurationMins": 30,
+            "defaultReminderMinutes": 15,
+            "defaultView": "week",
+            "showWeekNumbers": true,
+            "showWeekends": true,
+            "hiddenCalendars": []
+        }
     })
 }
 

@@ -432,6 +432,102 @@ pub fn calendar_sync(st: St) {
 }
 
 #[tauri::command]
+pub fn calendar_list(st: St, account_id: Option<String>) -> R<Vec<CalendarInfo>> {
+    st.db.calendars(account_id.as_deref()).map_err(err)
+}
+
+/// Downloads [from, to) from Graph (all calendars) into the cache and returns it. Used outside the sync window.
+#[tauri::command]
+pub async fn calendar_fetch_range(app: AppHandle, st: St<'_>, from: String, to: String, account_id: Option<String>) -> R<Vec<CalEvent>> {
+    calendar::fetch_range(&app, &st, &from, &to, account_id.as_deref()).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn event_get(st: St<'_>, account_id: String, event_id: String) -> R<EventFull> {
+    let cal = st.db.event(&event_id).map_err(err)?.map(|e| e.calendar_id).unwrap_or_default();
+    let full = graph::event_full(&st, &account_id, &cal, &calendar::local_tz(), &event_id).await.map_err(|e| format!("{e:#}"))?;
+    let _ = st.db.upsert_event(&full.event);
+    Ok(full)
+}
+
+/// `scope` = "series" edits the whole series of an occurrence; anything else edits just this event/occurrence.
+#[tauri::command]
+pub async fn event_update(
+    app: AppHandle,
+    st: St<'_>,
+    account_id: String,
+    event_id: String,
+    patch: EventPatch,
+    scope: Option<String>,
+) -> R<CalEvent> {
+    if let (Some(s), Some(e)) = (&patch.start, &patch.end) {
+        if e <= s {
+            return Err("The event must end after it starts".into());
+        }
+    }
+    if patch.subject.as_deref().is_some_and(|s| s.trim().is_empty()) {
+        return Err("Give the event a title".into());
+    }
+    let cached = st.db.event(&event_id).map_err(err)?;
+    let cal = cached.as_ref().map(|e| e.calendar_id.clone()).unwrap_or_default();
+    let target = match (scope.as_deref(), cached.as_ref().and_then(|e| e.series_master_id.clone())) {
+        (Some("series"), Some(master)) => master,
+        _ => event_id.clone(),
+    };
+    let series = target != event_id;
+    let ev = graph::update_event(&st, &account_id, &cal, &calendar::local_tz(), &target, &patch)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    if series {
+        // Occurrences are re-expanded by the next sync; drop stale ones now so the UI doesn't show both.
+        let _ = st.db.delete_series(&target);
+        st.sync_kick.notify_one();
+    } else {
+        // PATCH on an occurrence returns the (now exception) occurrence; replace the cached row.
+        let _ = st.db.delete_event(&event_id);
+        st.db.upsert_event(&ev).map_err(err)?;
+    }
+    let _ = app.emit("calendar://changed", json!({ "accountId": account_id }));
+    Ok(ev)
+}
+
+/// Deletes (or, as organizer with attendees, cancels with a note) an event or a whole series.
+#[tauri::command]
+pub async fn event_delete(
+    app: AppHandle,
+    st: St<'_>,
+    account_id: String,
+    event_id: String,
+    scope: Option<String>,
+    comment: Option<String>,
+) -> R<()> {
+    let cached = st.db.event(&event_id).map_err(err)?;
+    let target = match (scope.as_deref(), cached.as_ref().and_then(|e| e.series_master_id.clone())) {
+        (Some("series"), Some(master)) => master,
+        _ => event_id.clone(),
+    };
+    let organizer_with_guests = cached.as_ref().is_some_and(|e| e.response == "organizer" && !e.attendees.is_empty());
+    let res = if organizer_with_guests {
+        graph::cancel_event(&st, &account_id, &target, comment.as_deref()).await
+    } else {
+        graph::delete_event(&st, &account_id, &target).await
+    };
+    match res {
+        Ok(()) => {}
+        // Already gone on the server: treat as success so the cache catches up.
+        Err(e) if e.downcast_ref::<graph::GraphError>().is_some_and(|g| g.status == 404) => {}
+        Err(e) => return Err(format!("{e:#}")),
+    }
+    if target != event_id {
+        let _ = st.db.delete_series(&target);
+    } else {
+        let _ = st.db.delete_event(&event_id);
+    }
+    let _ = app.emit("calendar://changed", json!({ "accountId": account_id }));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn invite_get(st: St<'_>, message_id: String) -> R<Option<InviteInfo>> {
     calendar::invite(&st, &message_id).await.map_err(|e| format!("{e:#}"))
 }

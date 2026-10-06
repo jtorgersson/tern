@@ -35,8 +35,8 @@
       );
     } else if (app.view.kind === "today") {
       out.push("Plan my inbox for today", "What's my next meeting about?", "Find 30 min with Marcus this week", "Who is waiting on me, and for how long?");
-    } else if (app.view.kind === "agenda") {
-      out.push("Find 30 min with Marcus this week", "What's my next meeting about?", "Clear my Friday afternoon — propose what to move", "Which invitations haven't I answered?");
+    } else if (app.view.kind === "calendar") {
+      out.push("Find 30 min with Marcus this week", "What's my next meeting about?", "Clear my Friday afternoon — propose what to move", "Which invitations haven't I answered?", "Move my 1:1s next week to the afternoon");
     } else if (app.view.kind === "search") {
       out.push(`Dig deeper: find mail about “${app.view.query}”`, "Summarize these results");
     } else if (app.view.kind === "category") {

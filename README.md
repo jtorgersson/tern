@@ -8,7 +8,8 @@ AI-native, keyboard-first mail for Omarchy. It's built with Tauri 2, Rust, and S
   - Triage sorts mail into *Needs reply / Action / FYI / Newsletters / Notifications / Receipts*.
   - It also writes thread TL;DRs, drafts replies in your voice, and rewrites text.
   - A **Today** view opens with a streamed briefing of what matters, replies Tern drafted ahead of time for mail that needs an answer, mail you sent that nobody answered yet (with one-click nudges), and deadlines it spotted.
-  - **Calendar:** your day on the Today view, a week agenda (`g c`), invitation cards with Accept / Tentative / Decline that warn about conflicts, meeting reminders with a Join button, and an agent that finds free times across attendees and creates events (with your approval).
+  - **Calendar:** a full calendar (`g c`) with day, week, month and agenda views over any date range, all your Outlook calendars (own and shared, toggle each on/off), drag to move or resize, double-click to create, recurring events, optional attendees, show-as / reminder / private, quick add in plain English or Swedish ("Styrelsemöte fre 14-15:30"), invitation cards with Accept / Tentative / Decline that warn about conflicts, meeting reminders with a Join button, and an agent that lists, finds free times, creates, moves, reschedules and cancels events (each change with your approval).
+- **Swedish time conventions:** 24-hour clock everywhere (never AM/PM), weeks start on Monday, ISO week numbers. Day and month names in English or Swedish (Settings → Appearance).
   - An **agent** (`Ctrl+J`) can search, read, archive, flag, move, draft, schedule and respond to invites for you. Sending, deleting, creating events and responding to invitations always ask first.
 - **AI providers:** Anthropic (Claude, default `claude-opus-5-5`) or any OpenAI-compatible API (OpenAI, Ollama, LM Studio, OpenRouter, Groq…). Keys live in gnome-keyring.
 - **Local-first:** SQLite cache with full-text search at `~/.local/share/tern/tern.db`. Settings are in `~/.config/tern/settings.json`.
@@ -60,6 +61,9 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `c` | compose |
 | `/` | search |
 | `g t` / `g c` / `g i` / `g s` / `g d` / `g x` | today / calendar / inbox / sent / drafts / trash |
+| `d` / `w` / `m` / `a` | calendar: day / week / month / agenda |
+| `h` / `l`, `t` | calendar: previous / next period, today |
+| `n`, `e`, `#` | calendar: new event, edit, delete |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |
 | `?` | all shortcuts |

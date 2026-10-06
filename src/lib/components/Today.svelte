@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { weekdayDayMonthLong, weekdayDayMonth, hhmm } from "$lib/util/fmt";
   // Today: briefing + proactive cards. Replaces list + reader while active.
   import { app } from "$lib/state/app.svelte";
   import { today } from "$lib/state/today.svelte";
@@ -39,7 +40,7 @@
     const n = (app.accounts[0]?.displayName || "").trim();
     return /\s/.test(n) ? n.split(/\s+/)[0] : "";
   });
-  const dateLine = now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+  const dateLine = weekdayDayMonthLong(now);
 
   // Load whenever the view becomes active (reload() also triggers it after sync).
   $effect(() => {
@@ -98,7 +99,7 @@
   function dueLabel(iso: string): string {
     const d = new Date(iso);
     const hasTime = /T\d{2}:\d{2}/.test(iso) && !/T00:00(:00)?/.test(iso);
-    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + (hasTime ? ` · ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "");
+    return weekdayDayMonth(d) + (hasTime ? ` · ${hhmm(d)}` : "");
   }
 
   const dueGroups = $derived.by<{ label: string; items: MessageSummary[] }[]>(() => [

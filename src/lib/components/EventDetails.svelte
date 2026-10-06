@@ -1,29 +1,40 @@
 <script lang="ts">
-  // Event details popover: attendees with responses, organizer, location, join link, respond buttons.
+  // Event details popover: when / where / who, response tally, full description, respond, edit, move, delete.
   import { calendar } from "$lib/state/calendar.svelte";
   import { app } from "$lib/state/app.svelte";
   import { agent } from "$lib/state/agent.svelte";
-  import type { InviteAction } from "$lib/types";
-  import { whenLabel, untilLabel, isPast, initialsOf, RESPONSE_LABEL } from "$lib/util/cal";
-  import { hueColor } from "$lib/theme";
+  import { composer } from "$lib/state/composer.svelte";
+  import type { EditScope, InviteAction } from "$lib/types";
+  import { whenLabel, untilLabel, isPast, initialsOf, RESPONSE_LABEL, recurrenceLabel, SHOW_AS_LABEL, hm } from "$lib/util/cal";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { X, Video, MapPin, ExternalLink, Check, CircleHelp, Ban, Crown, CircleAlert, Sparkles, AlertTriangle } from "@lucide/svelte";
+  import { X, Video, MapPin, ExternalLink, Check, CircleHelp, Ban, Crown, CircleAlert, Sparkles, AlertTriangle, Pencil, Trash2, Copy, Repeat, Bell, Lock, Mail, Link as LinkIcon, Users } from "@lucide/svelte";
 
   const ev = $derived(calendar.details);
+  const full = $derived(calendar.detailsFull?.event.id === ev?.id ? calendar.detailsFull : null);
   const acct = $derived(ev ? app.accountById.get(ev.accountId) : undefined);
+  const cal = $derived(ev ? calendar.calendarById.get(ev.calendarId) : undefined);
   const conflicts = $derived(ev ? calendar.conflictsFor(ev) : []);
   const past = $derived(ev ? isPast(ev, calendar.now) : false);
   const canRespond = $derived(!!ev && ev.response !== "organizer" && !ev.isCancelled && !past && ev.organizer != null);
+  const canEdit = $derived(!!ev && !ev.isCancelled && (cal?.canEdit ?? true));
+  const isOrganizer = $derived(!!ev && (ev.response === "organizer" || ev.attendees.length === 0));
   let busy = $state<InviteAction | null>(null);
   let note = $state("");
   let showNote = $state(false);
   let sendResponse = $state(true);
+  let confirmDelete = $state<null | { scope: EditScope }>(null);
+  let cancelNote = $state("");
 
   $effect(() => {
     void ev?.id;
     note = "";
     showNote = false;
     sendResponse = true;
+    confirmDelete = null;
+    cancelNote = "";
+  });
+  $effect(() => {
+    if (calendar.deleteRequest && ev && canEdit) confirmDelete = { scope: "occurrence" };
   });
 
   async function respond(action: InviteAction) {
@@ -47,20 +58,50 @@
   function ask() {
     if (!ev) return;
     app.toggleAgent(true);
-    agent.send(`What is my meeting "${ev.subject}" (${whenLabel(ev)}) about? Check related mail.`);
+    agent.send(`What is my meeting "${ev.subject}" (${whenLabel(ev)}) about? Check related mail and tell me what I should prepare.`);
   }
+  function emailAttendees() {
+    if (!ev) return;
+    const me = acct?.email.toLowerCase();
+    const to = [...(ev.organizer ? [ev.organizer] : []), ...ev.attendees.map((a) => a.addr)].filter((a, i, arr) => a.email.toLowerCase() !== me && arr.findIndex((b) => b.email.toLowerCase() === a.email.toLowerCase()) === i);
+    composer.compose({ accountId: ev.accountId, to, subject: ev.subject });
+    calendar.openDetails(null);
+  }
+  async function copyLink() {
+    if (!ev?.joinUrl) return;
+    try {
+      await navigator.clipboard.writeText(ev.joinUrl);
+    } catch {}
+  }
+  async function doDelete() {
+    if (!ev || !confirmDelete) return;
+    try {
+      await calendar.remove(ev, confirmDelete.scope, cancelNote.trim() || null);
+    } catch {
+      /* toast */
+    }
+  }
+  const description = $derived((full?.bodyText ?? ev?.preview ?? "").trim());
+  const recurrence = $derived(full ? recurrenceLabel(full.recurrence) : ev?.seriesMasterId ? "Repeats" : "");
 </script>
 
 {#if ev}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="backdrop" onclick={() => calendar.openDetails(null)}>
-    <div class="pop" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Event details" tabindex="-1">
+    <div class="pop" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Event details" tabindex="-1" style:--c={calendar.colorOf(ev)}>
       <header>
         <div class="when">
           <span class="eyebrow">{whenLabel(ev)}</span>
           {#if !past && !ev.isCancelled}<span class="until mono">{untilLabel(ev, calendar.now)}</span>{/if}
         </div>
-        <button class="icon-btn s" onclick={() => calendar.openDetails(null)} aria-label="Close"><X size={15} /></button>
+        <div class="hdr-actions">
+          {#if canEdit}
+            <button class="icon-btn s" onclick={() => calendar.openEditor(ev, "occurrence")} title="Edit (e)"><Pencil size={14} /></button>
+            <button class="icon-btn s" onclick={() => calendar.duplicate(ev)} title="Duplicate"><Copy size={14} /></button>
+            <button class="icon-btn s danger" onclick={() => (confirmDelete = confirmDelete ? null : { scope: "occurrence" })} title="Delete (#)"><Trash2 size={14} /></button>
+          {/if}
+          <button class="icon-btn s" onclick={() => calendar.openDetails(null)} aria-label="Close"><X size={15} /></button>
+        </div>
       </header>
       <h2 class:strike={ev.isCancelled || ev.response === "declined"}>{ev.subject || "(no title)"}</h2>
       <div class="badges">
@@ -70,15 +111,40 @@
         {:else if ev.response === "tentativelyAccepted"}<span class="pill maybe"><CircleHelp size={11} /> Tentative</span>
         {:else if ev.response === "declined"}<span class="pill"><Ban size={11} /> Declined</span>
         {:else if ev.response === "notResponded"}<span class="pill warn"><CircleAlert size={11} /> Not responded</span>{/if}
-        {#if acct && app.accounts.length > 1}<span class="pill acct"><span class="dot" style:background={hueColor(acct.hue, app.mode)}></span>{acct.email}</span>{/if}
+        {#if ev.showAs !== "busy" && SHOW_AS_LABEL[ev.showAs]}<span class="pill">{SHOW_AS_LABEL[ev.showAs]}</span>{/if}
+        {#if ev.sensitivity === "private"}<span class="pill"><Lock size={10} /> Private</span>{/if}
+        {#if cal || (acct && app.accounts.length > 1)}
+          <span class="pill acct"><span class="dot"></span>{cal?.name ?? "Calendar"}{acct && app.accounts.length > 1 ? ` · ${acct.email}` : ""}</span>
+        {/if}
       </div>
+
+      {#if confirmDelete}
+        <div class="confirm">
+          <div class="ct">
+            {#if isOrganizer && ev.attendees.length}Cancel this meeting and notify {ev.attendees.length} attendee{ev.attendees.length === 1 ? "" : "s"}?{:else}Remove this event from your calendar?{/if}
+          </div>
+          {#if ev.seriesMasterId}
+            <div class="seg">
+              <button class:on={confirmDelete.scope === "occurrence"} onclick={() => (confirmDelete = { scope: "occurrence" })}>Only this one</button>
+              <button class:on={confirmDelete.scope === "series"} onclick={() => (confirmDelete = { scope: "series" })}>Whole series</button>
+            </div>
+          {/if}
+          {#if isOrganizer && ev.attendees.length}
+            <input class="field" bind:value={cancelNote} placeholder="Message to attendees (optional)" />
+          {/if}
+          <div class="cb">
+            <button class="btn danger" onclick={doDelete}><Trash2 size={13} /> {isOrganizer && ev.attendees.length ? "Cancel meeting" : "Delete"}</button>
+            <button class="btn ghost" onclick={() => (confirmDelete = null)}>Keep</button>
+          </div>
+        </div>
+      {/if}
 
       {#if conflicts.length && !ev.isCancelled && ev.response !== "declined"}
         <div class="conflict">
           <AlertTriangle size={13} />
           <div>
             {#each conflicts as c (c.id)}
-              <div>Overlaps with <b>{c.subject || "(no title)"}</b> <span class="mono">{whenLabel(c).split(", ")[1] ?? ""}</span></div>
+              <div>Overlaps with <button class="lnk" onclick={() => calendar.openDetails(c.id)}><b>{c.subject || "(no title)"}</b></button> <span class="mono">{hm(c.start)}–{hm(c.end)}</span></div>
             {/each}
           </div>
         </div>
@@ -86,13 +152,27 @@
 
       <div class="rows">
         {#if ev.isOnline && ev.joinUrl}
-          <button class="btn primary join" onclick={() => openUrl(ev.joinUrl!)} disabled={past || ev.isCancelled}><Video size={14} /> Join Teams meeting</button>
+          <div class="joinrow">
+            <button class="btn primary join" onclick={() => openUrl(ev.joinUrl!)} disabled={past || ev.isCancelled}><Video size={14} /> Join Teams meeting</button>
+            <button class="icon-btn s" onclick={copyLink} title="Copy link"><LinkIcon size={13} /></button>
+          </div>
         {/if}
         {#if ev.location}
           <div class="row"><MapPin size={14} /><span>{ev.location}</span></div>
         {/if}
-        {#if ev.organizer}
+        {#if recurrence}
+          <div class="row"><Repeat size={14} /><span>{recurrence}</span>
+            {#if canEdit && ev.seriesMasterId}<button class="lnk small" onclick={() => calendar.openEditor(ev, "series")}>Edit series</button>{/if}
+          </div>
+        {/if}
+        {#if ev.reminderMinutes != null}
+          <div class="row"><Bell size={14} /><span>{ev.reminderMinutes === 0 ? "Reminder at start" : ev.reminderMinutes < 60 ? `Reminder ${ev.reminderMinutes} min before` : `Reminder ${ev.reminderMinutes / 60} h before`}</span></div>
+        {/if}
+        {#if ev.organizer && ev.response !== "organizer"}
           <div class="row"><Crown size={14} /><span>Organized by <b>{ev.organizer.name || ev.organizer.email}</b></span></div>
+        {/if}
+        {#if ev.categories.length}
+          <div class="row cats">{#each ev.categories as c (c)}<span class="cat">{c}</span>{/each}</div>
         {/if}
       </div>
 
@@ -110,7 +190,7 @@
           {#each ev.attendees as a (a.addr.email)}
             <li>
               <span class="av" class:optional={a.type === "optional"}>{initialsOf(a.addr.name, a.addr.email)}</span>
-              <span class="an">{a.addr.name || a.addr.email}</span>
+              <span class="an" title={a.addr.email}>{a.addr.name || a.addr.email}</span>
               {#if a.type === "optional"}<span class="opt">optional</span>{/if}
               <span class="spacer"></span>
               <span class="resp {a.response}" title={RESPONSE_LABEL[a.response]}>
@@ -121,8 +201,8 @@
         </ul>
       {/if}
 
-      {#if ev.preview}
-        <p class="preview">{ev.preview}</p>
+      {#if description}
+        <p class="preview" class:full={!!full}>{description}</p>
       {/if}
 
       {#if canRespond}
@@ -132,7 +212,7 @@
             <button class="btn" class:on={ev.response === "tentativelyAccepted"} disabled={!!busy} onclick={() => respond("tentativelyAccept")}><CircleHelp size={13} /> Tentative</button>
             <button class="btn" class:on={ev.response === "declined"} disabled={!!busy} onclick={() => respond("decline")}><Ban size={13} /> Decline</button>
             <span class="spacer"></span>
-            {#if !showNote}<button class="link" onclick={() => (showNote = true)}>Add a note</button>{/if}
+            {#if !showNote}<button class="lnk small" onclick={() => (showNote = true)}>Add a note</button>{/if}
           </div>
           {#if showNote}
             <input class="field" bind:value={note} placeholder="Note to the organizer (optional)" />
@@ -142,9 +222,10 @@
       {/if}
 
       <footer>
-        {#if app.aiReady}<button class="mini" onclick={ask}><Sparkles size={12} /> What's this about?</button>{/if}
+        {#if app.aiReady}<button class="mini" onclick={ask}><Sparkles size={12} /> Prep me</button>{/if}
+        {#if ev.attendees.length || (ev.organizer && ev.response !== "organizer")}<button class="mini" onclick={emailAttendees}><Mail size={12} /> Email {ev.response === "organizer" ? "attendees" : "everyone"}</button>{/if}
         <span class="spacer"></span>
-        {#if ev.webLink}<button class="mini" onclick={() => openUrl(ev.webLink!)}>Open in Outlook <ExternalLink size={12} /></button>{/if}
+        {#if ev.webLink}<button class="mini" onclick={() => openUrl(ev.webLink!)}>Outlook <ExternalLink size={12} /></button>{/if}
       </footer>
     </div>
   </div>
@@ -166,13 +247,14 @@
     }
   }
   .pop {
-    width: min(520px, calc(100vw - 40px));
+    width: min(540px, calc(100vw - 40px));
     max-height: calc(100vh - 80px);
     overflow-y: auto;
     padding: 16px 18px 14px;
     border-radius: 16px;
     background: color-mix(in oklab, var(--bg-lighter) 55%, var(--bg));
     box-shadow: var(--shadow);
+    border-top: 3px solid var(--c);
     animation: fade-up 180ms var(--ease);
     display: flex;
     flex-direction: column;
@@ -189,6 +271,14 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
+  }
+  .hdr-actions {
+    display: flex;
+    gap: 2px;
+  }
+  .icon-btn.danger:hover {
+    color: var(--red);
   }
   .until {
     font-size: 10.5px;
@@ -246,6 +336,48 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
+    background: var(--c);
+  }
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: color-mix(in oklab, var(--red) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--red) 30%, transparent);
+  }
+  .ct {
+    font-size: 13px;
+    color: var(--fg-bright);
+    font-weight: 550;
+  }
+  .seg {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--hover);
+  }
+  .seg button {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+  .seg button.on {
+    color: var(--fg-bright);
+    background: var(--raised);
+    box-shadow: var(--shadow-sm);
+  }
+  .cb {
+    display: flex;
+    gap: 6px;
+  }
+  .confirm .field {
+    height: 30px;
+    font-size: 12.5px;
   }
   .conflict {
     display: flex;
@@ -266,6 +398,16 @@
     font-size: 11px;
     opacity: 0.85;
   }
+  .lnk {
+    color: inherit;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .lnk.small {
+    font-size: 12px;
+    color: var(--accent);
+    text-decoration: none;
+  }
   .rows {
     display: flex;
     flex-direction: column;
@@ -282,8 +424,20 @@
     color: var(--fg);
     font-weight: 600;
   }
-  .join {
-    align-self: flex-start;
+  .joinrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .cats {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .cat {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--hover);
   }
   .att-head {
     display: flex;
@@ -389,6 +543,12 @@
     overflow: hidden;
     mask-image: linear-gradient(to bottom, black 70%, transparent);
   }
+  .preview.full {
+    max-height: 260px;
+    overflow-y: auto;
+    mask-image: none;
+    padding-right: 4px;
+  }
   .respond {
     display: flex;
     flex-direction: column;
@@ -404,10 +564,6 @@
   .rbtns .btn.on {
     box-shadow: inset 0 0 0 1px var(--accent-line);
     background: var(--accent-soft);
-  }
-  .link {
-    font-size: 12px;
-    color: var(--accent);
   }
   .send {
     display: flex;

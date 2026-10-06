@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { api } from "$lib/api";
 import { applyTheme } from "$lib/theme";
 import { configureAi, hasAi, resetBackends, triage } from "$lib/ai";
+import { setLocale } from "$lib/util/fmt";
 import {
   EVENTS,
   type Account,
@@ -106,7 +107,7 @@ class AppState {
       this.view.kind !== "folder",
   );
   /** Views that replace the list + reader with a single canvas. */
-  isCanvasView = $derived(this.view.kind === "today" || this.view.kind === "agenda");
+  isCanvasView = $derived(this.view.kind === "today" || this.view.kind === "calendar");
 
   private unlisten: UnlistenFn[] = [];
   private loadSeq = 0;
@@ -119,6 +120,7 @@ class AppState {
       const boot = await api.bootstrap();
       this.accounts = boot.accounts;
       this.settings = boot.settings;
+      setLocale(boot.settings.ui.locale);
       this.theme = boot.theme;
       applyTheme(boot.theme, boot.settings.ui.translucent);
       configureAi(() => this.settings!);
@@ -199,6 +201,7 @@ class AppState {
   async saveSettings(next: Settings) {
     try {
       this.settings = await api.settingsSet(next);
+      setLocale(this.settings.ui.locale);
       resetBackends();
       import("./today.svelte").then(({ today }) => {
         if (!this.settings?.ai.predraftReplies) today.cancelPredraft();
@@ -318,7 +321,7 @@ class AppState {
     this.loading = true;
     try {
       let list: MessageSummary[];
-      if (this.view.kind === "today" || this.view.kind === "agenda") {
+      if (this.view.kind === "today" || this.view.kind === "calendar") {
         if (this.view.kind === "today") {
           const { today } = await import("./today.svelte");
           await today.load();
@@ -370,7 +373,7 @@ class AppState {
   }
 
   async loadMore() {
-    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today" || this.view.kind === "agenda") return;
+    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today" || this.view.kind === "calendar") return;
     const last = this.messages[this.messages.length - 1];
     if (!last) return;
     this.loading = true;
@@ -421,7 +424,7 @@ class AppState {
     switch (v.kind) {
       case "today":
         return "Today";
-      case "agenda":
+      case "calendar":
         return "Calendar";
       case "unified":
         return v.wellKnown === "inbox"
@@ -448,7 +451,7 @@ class AppState {
 
   // ======================= selection & reader =======================
   select(id: string | null, openIt = true) {
-    if (id && (this.view.kind === "today" || this.view.kind === "agenda")) {
+    if (id && (this.view.kind === "today" || this.view.kind === "calendar")) {
       // Leave Today for the inbox so the reader has a list to sit next to.
       this.view = { kind: "unified", wellKnown: "inbox" };
       this.reload(true).then(() => (this.selectedId = id));

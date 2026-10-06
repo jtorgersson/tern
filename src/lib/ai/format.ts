@@ -1,4 +1,5 @@
 // Compact, model-friendly renderings of mail objects. Mail content is untrusted and always wrapped in <email> tags.
+import { isoWeek } from "$lib/util/fmt";
 import type { Account, Addr, CalEvent, MessageFull, MessageSummary } from "../types";
 
 export const BODY_LIMIT = 12_000;
@@ -97,7 +98,8 @@ export function accountsLine(accounts: Account[]): string {
 export function nowLine(): string {
   const d = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `${d.toLocaleString("sv-SE", { timeZone: tz })} (${tz}, ${d.toLocaleDateString("en-US", { weekday: "long" })})`;
+  const w = d.toLocaleDateString("en-US", { weekday: "long" });
+  return `${d.toLocaleString("sv-SE", { timeZone: tz })} (${tz}, ${w}, ISO week ${isoWeek(d)}; 24-hour clock, weeks start Monday)`;
 }
 
 /** Compact JSON-able event for tool results. */
@@ -115,5 +117,8 @@ export function compactEvent(e: CalEvent) {
     attendees: e.attendees.length ? e.attendees.slice(0, 12).map((a) => `${addr(a.addr)}${a.response !== "none" ? ` (${a.response})` : ""}`) : undefined,
     myResponse: e.response,
     cancelled: e.isCancelled || undefined,
+    repeats: e.seriesMasterId ? true : undefined,
+    showAs: e.showAs !== "busy" ? e.showAs : undefined,
+    private: e.sensitivity === "private" || undefined,
   };
 }

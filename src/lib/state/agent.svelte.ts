@@ -136,7 +136,9 @@ class AgentState {
       case "open_event": {
         const show = () => {
           if (calendar.events.some((e) => e.id === action.id)) {
-            app.setView({ kind: "agenda" });
+            app.setView({ kind: "calendar" });
+            const ev = calendar.events.find((e) => e.id === action.id);
+            if (ev) calendar.goto(new Date(ev.start));
             calendar.openDetails(action.id);
           } else toasts.show("Event created — it will appear in the calendar after the next sync", { kind: "success" });
         };

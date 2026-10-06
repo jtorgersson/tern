@@ -6,6 +6,8 @@ import type {
   AiCategory,
   CalEvent,
   EventDraft,
+  EventPatch,
+  Recurrence,
   MessageSummary,
   MessageView,
   OutgoingMessage,
@@ -14,6 +16,7 @@ import type {
 import type { ToolSpec } from "./backend";
 import { settings } from "./config";
 import { addr, compactEvent, compactSummary, emailBlock, threadBlock, truncate } from "./format";
+import { hhmm, weekdayDayMonth } from "$lib/util/fmt";
 
 export type Approval = "never" | "safe" | "always";
 
@@ -125,16 +128,58 @@ async function buildOutgoing(i: ComposeInput, ctx: ToolCtx): Promise<Partial<Out
 }
 
 const LocalIso = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "local ISO like 2026-10-08T14:00:00 (no offset)");
+const Scope = z.enum(["occurrence", "series"]).optional().describe("For recurring events: just this occurrence (default) or the whole series");
+const WeekdayZ = z.enum(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]);
+const RecurrenceZ = z
+  .object({
+    pattern: z.object({
+      type: z.enum(["daily", "weekly", "absoluteMonthly", "relativeMonthly", "absoluteYearly", "relativeYearly"]),
+      interval: z.number().int().min(1).max(99).describe("Every N days/weeks/months/years"),
+      daysOfWeek: z.array(WeekdayZ).optional().describe("weekly / relativeMonthly"),
+      dayOfMonth: z.number().int().min(1).max(31).optional().describe("absoluteMonthly / absoluteYearly"),
+      month: z.number().int().min(1).max(12).optional().describe("yearly"),
+      index: z.enum(["first", "second", "third", "fourth", "last"]).optional().describe("relativeMonthly: which weekday of the month"),
+    }),
+    range: z.object({
+      type: z.enum(["noEnd", "endDate", "numbered"]),
+      endDate: z.string().optional().describe("YYYY-MM-DD when type=endDate"),
+      numberOfOccurrences: z.number().int().min(1).max(999).optional(),
+    }),
+  })
+  .describe("Repeat rule (Microsoft Graph patternedRecurrence). Weeks start on Monday.");
+const sec = (s: string) => (s.length === 16 ? s + ":00" : s);
+
+/** Sync window of the local cache (mirror of calendar.rs); outside it the agent must fetch from the server first. */
+const WINDOW_BACK_DAYS = 14;
+const WINDOW_AHEAD_DAYS = 45;
+function insideWindow(from: string, to: string): boolean {
+  const now = new Date();
+  const lo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - WINDOW_BACK_DAYS);
+  const hi = new Date(now.getFullYear(), now.getMonth(), now.getDate() + WINDOW_AHEAD_DAYS);
+  return new Date(from) >= lo && new Date(to) <= hi;
+}
 
 function whenText(start: string, end: string, allDay = false): string {
   const s = new Date(start);
   const e = new Date(end);
-  const day = s.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const day = weekdayDayMonth(s);
   if (allDay) return `${day} · all day`;
-  const t = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const t = (d: Date) => hhmm(d);
   const mins = Math.round((e.getTime() - s.getTime()) / 60_000);
   const dur = mins >= 60 ? `${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ""}` : `${mins}m`;
   return `${day}, ${t(s)} – ${t(e)} (${dur})`;
+}
+
+function recurrenceText(r: Recurrence): string {
+  const p = r.pattern;
+  const n = p.interval ?? 1;
+  const unit = p.type === "daily" ? "day" : p.type === "weekly" ? "week" : p.type.includes("Monthly") ? "month" : "year";
+  let s = `every ${n === 1 ? unit : `${n} ${unit}s`}`;
+  if (p.daysOfWeek?.length) s += ` on ${p.daysOfWeek.map((d) => d.slice(0, 3)).join(", ")}`;
+  if (p.dayOfMonth && unit !== "week") s += ` on day ${p.dayOfMonth}`;
+  if (r.range.type === "endDate" && r.range.endDate) s += ` until ${r.range.endDate}`;
+  if (r.range.type === "numbered" && r.range.numberOfOccurrences) s += `, ${r.range.numberOfOccurrences} times`;
+  return s;
 }
 
 async function resolveAccount(id: string | undefined, ctx: ToolCtx): Promise<string> {
@@ -353,7 +398,7 @@ export const TOOLS = [
   // ---------------- calendar ----------------
   def({
     name: "list_events",
-    description: "List calendar events between two local date-times (cached window: 7 days back to 3 weeks ahead). Includes attendees, the user's response, location and online-meeting flag.",
+    description: "List calendar events between two local date-times, from all of the user's calendars (any range up to a year; ranges far from today are fetched from the server). Includes attendees, the user's response, location, online flag, calendar and whether it repeats.",
     schema: z.object({
       from: LocalIso.describe("Start of range, local ISO"),
       to: LocalIso.describe("End of range (exclusive), local ISO"),
@@ -362,9 +407,25 @@ export const TOOLS = [
     approval: "never",
     label: (i) => `Checking calendar ${i.from.slice(0, 10)} → ${i.to.slice(0, 10)}`,
     async run(i, ctx) {
-      const list = await api.calendarEvents(i.from, i.to, i.account_id ?? null);
+      const from = sec(i.from);
+      const to = sec(i.to);
+      if (to <= from) throw new Error("to must be after from");
+      const list = insideWindow(from, to) ? await api.calendarEvents(from, to, i.account_id ?? null) : await api.calendarFetchRange(from, to, i.account_id ?? null);
       for (const e of list) ctx.knownEvents.set(e.id, e);
-      return { count: list.length, events: list.map(compactEvent) };
+      const cals = await api.calendars(null);
+      const calName = new Map(cals.map((c) => [c.id, c.name]));
+      return { count: list.length, events: list.map((e) => ({ ...compactEvent(e), calendar: calName.get(e.calendarId) || undefined })) };
+    },
+  }),
+  def({
+    name: "list_calendars",
+    description: "The user's calendars per account (name, id, default, editable, shared owner). Use calendar_id with create_event to put something in a specific calendar.",
+    schema: z.object({ account_id: AccountId }),
+    approval: "never",
+    label: () => "Listing calendars",
+    async run(i) {
+      const cals = await api.calendars(i.account_id ?? null);
+      return { calendars: cals.map((c) => ({ id: c.id, account: c.accountId, name: c.name, default: c.isDefault || undefined, editable: c.canEdit, sharedBy: c.owner || undefined })) };
     },
   }),
   def({
@@ -411,6 +472,12 @@ export const TOOLS = [
       body: z.string().optional().describe("Plain-text description / agenda"),
       is_online: z.boolean().optional().describe("Add a Teams meeting link (default true when there are attendees)"),
       is_all_day: z.boolean().optional(),
+      optional_attendees: z.array(Recipient).optional(),
+      recurrence: RecurrenceZ.optional(),
+      show_as: z.enum(["free", "tentative", "busy", "oof", "workingElsewhere"]).optional().describe("Default busy; use free for reminders/placeholders, oof for vacation"),
+      reminder_minutes: z.number().int().min(-1).max(10080).optional().describe("Reminder before start; -1 = none; omit for the user's default"),
+      is_private: z.boolean().optional(),
+      calendar_id: z.string().optional().describe("From list_calendars; default calendar when omitted"),
       account_id: AccountId,
     }),
     approval: "always",
@@ -419,9 +486,13 @@ export const TOOLS = [
       const lines = [
         `${i.subject}`,
         `When: ${whenText(i.start, i.end, i.is_all_day)}`,
+        i.recurrence ? `Repeats: ${recurrenceText(i.recurrence as Recurrence)}` : "",
         i.location ? `Where: ${i.location}` : "",
         (i.is_online ?? (i.attendees?.length ?? 0) > 0) ? "Teams meeting link will be added" : "",
         i.attendees?.length ? `Invite: ${i.attendees.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(", ")}` : "No attendees (personal event)",
+        i.optional_attendees?.length ? `Optional: ${i.optional_attendees.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(", ")}` : "",
+        i.show_as && i.show_as !== "busy" ? `Show as: ${i.show_as}` : "",
+        i.is_private ? "Private" : "",
         i.body ? `\n${truncate(i.body, 400)}` : "",
       ];
       return lines.filter(Boolean).join("\n");
@@ -430,19 +501,127 @@ export const TOOLS = [
       if (i.end <= i.start) throw new Error("end must be after start");
       const draft: EventDraft = {
         accountId: await resolveAccount(i.account_id, ctx),
+        calendarId: i.calendar_id ?? null,
         subject: i.subject,
-        start: i.start.length === 16 ? i.start + ":00" : i.start,
-        end: i.end.length === 16 ? i.end + ":00" : i.end,
+        start: sec(i.start),
+        end: sec(i.end),
         isAllDay: i.is_all_day ?? false,
         location: i.location ?? null,
         body: i.body ?? null,
         attendees: (i.attendees ?? []).map((a) => ({ name: a.name ?? "", email: a.email })),
+        optionalAttendees: (i.optional_attendees ?? []).map((a) => ({ name: a.name ?? "", email: a.email })),
         isOnline: i.is_online ?? (i.attendees?.length ?? 0) > 0,
+        showAs: i.show_as ?? null,
+        reminderMinutes: i.reminder_minutes ?? settings().calendar?.defaultReminderMinutes ?? null,
+        sensitivity: i.is_private ? "private" : null,
+        recurrence: (i.recurrence as Recurrence | undefined) ?? null,
       };
       const ev = await api.eventCreate(draft);
       ctx.knownEvents.set(ev.id, ev);
       ctx.ui({ kind: "open_event", id: ev.id });
       return { created: compactEvent(ev) };
+    },
+  }),
+  def({
+    name: "update_event",
+    description: "Change an existing event (by id from list_events): move it, rename it, change attendees, location, notes, repeat rule, show-as, reminder. Attendees get an update automatically when the user organizes the meeting. Always asks the user to confirm.",
+    schema: z.object({
+      event_id: z.string(),
+      scope: Scope,
+      subject: z.string().optional(),
+      start: LocalIso.optional(),
+      end: LocalIso.optional(),
+      is_all_day: z.boolean().optional(),
+      location: z.string().nullable().optional().describe("null clears"),
+      body: z.string().nullable().optional().describe("Plain-text notes; null clears"),
+      attendees: z.array(Recipient).optional().describe("Replaces the required attendee list"),
+      optional_attendees: z.array(Recipient).optional(),
+      is_online: z.boolean().optional(),
+      show_as: z.enum(["free", "tentative", "busy", "oof", "workingElsewhere"]).optional(),
+      reminder_minutes: z.number().int().min(-1).max(10080).optional().describe("-1 = none"),
+      is_private: z.boolean().optional(),
+      recurrence: RecurrenceZ.nullable().optional().describe("With scope=series: new rule, or null to stop repeating"),
+      account_id: AccountId,
+    }),
+    approval: "always",
+    label: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      return `Updating “${truncate(e?.subject || "event", 36)}”`;
+    },
+    preview: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      const lines = [
+        `${e?.subject ?? i.event_id}${i.scope === "series" ? " (whole series)" : e?.seriesMasterId ? " (this occurrence)" : ""}`,
+        e ? `Currently: ${whenText(e.start, e.end, e.isAllDay)}` : "",
+        i.start || i.end ? `New time: ${whenText(i.start ?? e?.start ?? "", i.end ?? e?.end ?? "", i.is_all_day ?? e?.isAllDay)}` : "",
+        i.subject ? `New title: ${i.subject}` : "",
+        i.location !== undefined ? `Where: ${i.location ?? "(cleared)"}` : "",
+        i.attendees ? `Attendees: ${i.attendees.map((a) => a.email).join(", ")}` : "",
+        i.recurrence !== undefined ? `Repeats: ${i.recurrence ? recurrenceText(i.recurrence as Recurrence) : "no longer"}` : "",
+        i.show_as ? `Show as: ${i.show_as}` : "",
+        i.body !== undefined ? `Notes: ${i.body ? truncate(i.body, 200) : "(cleared)"}` : "",
+        e && e.response === "organizer" && e.attendees.length ? `${e.attendees.length} attendee${e.attendees.length === 1 ? "" : "s"} will receive an update` : "",
+      ];
+      return lines.filter(Boolean).join("\n");
+    },
+    async run(i, ctx) {
+      const known = ctx.knownEvents.get(i.event_id);
+      const accountId = known?.accountId ?? (await resolveAccount(i.account_id, ctx));
+      if (i.start && i.end && i.end <= i.start) throw new Error("end must be after start");
+      const patch: EventPatch = {};
+      if (i.subject !== undefined) patch.subject = i.subject;
+      if (i.start !== undefined) patch.start = sec(i.start);
+      if (i.end !== undefined) patch.end = sec(i.end);
+      if (i.is_all_day !== undefined) patch.isAllDay = i.is_all_day;
+      if (i.location !== undefined) patch.location = i.location;
+      if (i.body !== undefined) patch.body = i.body;
+      if (i.attendees) patch.attendees = i.attendees.map((a) => ({ name: a.name ?? "", email: a.email }));
+      if (i.optional_attendees) patch.optionalAttendees = i.optional_attendees.map((a) => ({ name: a.name ?? "", email: a.email }));
+      if (i.attendees && !i.optional_attendees && known) patch.optionalAttendees = known.attendees.filter((a) => a.type === "optional").map((a) => a.addr);
+      if (i.is_online !== undefined) patch.isOnline = i.is_online;
+      if (i.show_as) patch.showAs = i.show_as;
+      if (i.reminder_minutes !== undefined) patch.reminderMinutes = i.reminder_minutes < 0 ? null : i.reminder_minutes;
+      if (i.is_private !== undefined) patch.sensitivity = i.is_private ? "private" : "normal";
+      if (i.recurrence !== undefined) patch.recurrence = (i.recurrence as Recurrence | null) ?? null;
+      const ev = await api.eventUpdate(accountId, i.event_id, patch, i.scope ?? "occurrence");
+      ctx.knownEvents.set(ev.id, ev);
+      ctx.ui({ kind: "open_event", id: ev.id });
+      return { updated: compactEvent(ev) };
+    },
+  }),
+  def({
+    name: "delete_event",
+    description: "Delete an event, or cancel a meeting the user organizes (attendees are notified, with an optional message). For recurring events choose this occurrence or the whole series. Always asks the user to confirm.",
+    schema: z.object({
+      event_id: z.string(),
+      scope: Scope,
+      comment: z.string().optional().describe("Message to attendees when cancelling a meeting the user organizes"),
+      account_id: AccountId,
+    }),
+    approval: "always",
+    label: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      const organizer = e?.response === "organizer" && (e?.attendees.length ?? 0) > 0;
+      return `${organizer ? "Cancelling" : "Deleting"} “${truncate(e?.subject || "event", 36)}”`;
+    },
+    preview: (i, ctx) => {
+      const e = ctx.knownEvents.get(i.event_id);
+      const organizer = e?.response === "organizer" && (e?.attendees.length ?? 0) > 0;
+      return [
+        `${organizer ? "Cancel meeting" : "Delete"}: ${e?.subject ?? i.event_id}${i.scope === "series" ? " — whole series" : e?.seriesMasterId ? " — this occurrence only" : ""}`,
+        e ? `When: ${whenText(e.start, e.end, e.isAllDay)}` : "",
+        organizer ? `${e!.attendees.length} attendee${e!.attendees.length === 1 ? "" : "s"} will be notified` : "",
+        i.comment ? `Message: ${i.comment}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    },
+    async run(i, ctx) {
+      const known = ctx.knownEvents.get(i.event_id);
+      const accountId = known?.accountId ?? (await resolveAccount(i.account_id, ctx));
+      await api.eventDelete(accountId, i.event_id, i.scope ?? "occurrence", i.comment ?? null);
+      ctx.knownEvents.delete(i.event_id);
+      return "Done.";
     },
   }),
   def({

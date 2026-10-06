@@ -127,6 +127,54 @@ export interface CalEvent {
   preview: string;
   seriesMasterId: string | null;
   responseRequested: boolean;
+  /** Graph calendar id ("" for legacy cache rows). */
+  calendarId: string;
+  eventType: "singleInstance" | "occurrence" | "exception" | "seriesMaster";
+  /** Minutes before start; null = reminder off. */
+  reminderMinutes: number | null;
+  sensitivity: "normal" | "personal" | "private" | "confidential";
+  importance: "low" | "normal" | "high";
+  categories: string[];
+}
+
+/** One of the user's Outlook calendars. */
+export interface Calendar {
+  id: string;
+  accountId: string;
+  name: string;
+  /** "#rrggbb" when Outlook assigned a colour. */
+  color: string | null;
+  isDefault: boolean;
+  canEdit: boolean;
+  owner: string | null;
+}
+
+/** Graph patternedRecurrence (subset we build and read). */
+export interface Recurrence {
+  pattern: {
+    type: "daily" | "weekly" | "absoluteMonthly" | "relativeMonthly" | "absoluteYearly" | "relativeYearly";
+    interval: number;
+    daysOfWeek?: Weekday[];
+    dayOfMonth?: number;
+    month?: number;
+    index?: "first" | "second" | "third" | "fourth" | "last";
+    firstDayOfWeek?: Weekday;
+  };
+  range: {
+    type: "noEnd" | "endDate" | "numbered";
+    startDate?: string; // YYYY-MM-DD
+    endDate?: string;
+    numberOfOccurrences?: number;
+    recurrenceTimeZone?: string;
+  };
+}
+export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+export interface EventFull {
+  event: CalEvent;
+  bodyHtml: string;
+  bodyText: string;
+  recurrence: Recurrence | null;
 }
 
 export interface InviteInfo {
@@ -151,7 +199,37 @@ export interface EventDraft {
   attendees: Addr[];
   /** Create a Teams meeting link. */
   isOnline: boolean;
+  /** Target calendar id (default calendar when omitted). */
+  calendarId?: string | null;
+  optionalAttendees?: Addr[];
+  showAs?: ShowAs | null;
+  /** Minutes before start; negative = no reminder; omitted = Outlook default. */
+  reminderMinutes?: number | null;
+  sensitivity?: "normal" | "private" | null;
+  recurrence?: Recurrence | null;
+  categories?: string[];
 }
+
+/** Partial update; `null` clears location / body / reminder / recurrence. Omitted keys are left alone. */
+export interface EventPatch {
+  subject?: string;
+  start?: string;
+  end?: string;
+  isAllDay?: boolean;
+  location?: string | null;
+  body?: string | null;
+  attendees?: Addr[];
+  optionalAttendees?: Addr[];
+  isOnline?: boolean;
+  showAs?: ShowAs;
+  reminderMinutes?: number | null;
+  sensitivity?: "normal" | "private";
+  recurrence?: Recurrence | null;
+  categories?: string[];
+}
+
+/** For occurrences of a series: change just this one, or the whole series. */
+export type EditScope = "occurrence" | "series";
 
 export interface FreeSlotQuery {
   accountId: string;
@@ -193,7 +271,7 @@ export interface MessageFull extends MessageSummary {
 
 export type MessageView =
   | { kind: "today" } // briefing / proactive view (no list query)
-  | { kind: "agenda" } // 7-day calendar agenda (no list query)
+  | { kind: "calendar" } // calendar (day/week/month/agenda; no list query)
   | { kind: "folder"; folderId: string }
   | { kind: "unified"; wellKnown: WellKnownFolder } // across all accounts
   | { kind: "flagged" }
@@ -266,6 +344,8 @@ export interface Settings {
     /** How HTML mail renders: on a light "paper" card, or adapted to the dark theme. */
     mailRendering: "paper" | "adaptive";
     translucent: boolean;
+    /** Language for dates and weekday/month names. Times are always 24-hour, weeks start on Monday. */
+    locale: "en-GB" | "sv-SE";
   };
   signatures: Record<string, string>; // accountId -> html
   syncIntervalSecs: number;
@@ -275,8 +355,20 @@ export interface Settings {
     /** Working hours used for free-slot search, "HH:MM". */
     workStart: string;
     workEnd: string;
+    /** Length of a new event when nothing else is given. */
+    defaultDurationMins: number;
+    /** Reminder on new events (negative = none). */
+    defaultReminderMinutes: number;
+    defaultView: CalView;
+    /** ISO week numbers in week/month views. */
+    showWeekNumbers: boolean;
+    showWeekends: boolean;
+    /** Calendar ids the user switched off. */
+    hiddenCalendars: string[];
   };
 }
+
+export type CalView = "day" | "week" | "month" | "agenda";
 
 export interface Theme {
   name: string;

@@ -80,6 +80,11 @@ pub fn run() {
             commands::invite_respond,
             commands::event_create,
             commands::calendar_free_slots,
+            commands::calendar_list,
+            commands::calendar_fetch_range,
+            commands::event_get,
+            commands::event_update,
+            commands::event_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tern");

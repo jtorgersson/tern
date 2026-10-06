@@ -30,7 +30,7 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 
 ## Storage
 * Data: `~/.local/share/tern/tern.db` (SQLite, WAL). Tables: accounts, folders, messages, bodies,
-  annotations, contacts, sync_state, `messages_fts` (FTS5 over subject/from/preview/body text).
+  annotations, contacts, sync_state, events, calendars, `messages_fts` (FTS5 over subject/from/preview/body text).
 * Settings: `~/.config/tern/settings.json`.
 * Secrets (gnome-keyring, service `tern`): `ms:<accountId>` refresh token, `ai:<providerId>` API keys.
 
@@ -40,8 +40,13 @@ Public-client app registration (no secret). Auth-code + PKCE against
 Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`.
 Sync: `/me/mailFolders` + per-folder `messages/delta` (inbox, sent, drafts, archive, deleted, junk), polling every
 `syncIntervalSecs`. Bodies fetched lazily on open (and for AI on demand).
-Calendar (`calendar.rs`): each sync cycle replaces a cached window (−7d…+21d) of `/me/calendarView` per account, with
-`Prefer: outlook.timezone="<system IANA zone>"` so stored times are local wall-clock strings. Meeting mails are detected by
+Calendar (`calendar.rs`): each sync cycle lists `/me/calendars` and replaces a cached window (−14d…+45d) of
+`/me/calendars/{id}/calendarView` for every calendar of the account, with `Prefer: outlook.timezone="<system IANA zone>"`
+so stored times are local wall-clock strings. Other ranges are fetched on demand (`calendar_fetch_range`, ≤400 days) when
+the UI or the agent navigates there; the frontend store tracks per-month coverage with a 10-minute TTL. Events are
+created / patched / deleted via `/me/events` (`event_update` / `event_delete` take `scope: occurrence | series`; an
+organizer's meeting with attendees is cancelled via `/cancel` so attendees are notified). `event_get` fetches the full body
+and the series' recurrence rule. Meeting mails are detected by
 `@odata.type` in delta and resolved on open via `GET /me/messages/{id}?$expand=microsoft.graph.eventMessage/event`;
 conflicts are computed from the cache. Free slots use `/me/calendar/getSchedule` (falls back to the own cache on personal
 accounts). A 30 s loop sends a desktop reminder `settings.calendar.reminderMinutes` before each meeting.
@@ -95,3 +100,16 @@ Colors come from the live Omarchy theme as CSS variables (`--accent`, `--bg`, �
 Keyboard: `j/k` next/prev · `Enter`/`o` open · `e` archive · `#` delete · `s` star/flag · `u` toggle read ·
 `r` reply · `R`/`a`… see `src/lib/keys.ts` · `c` compose · `/` search · `g i` inbox · `g s` sent ·
 `Ctrl+K` palette · `Ctrl+J` agent · `Esc` close.
+
+## Dates and times
+All user-facing formatting goes through `src/lib/util/fmt.ts`: 24-hour clock (`hhmm`), Monday-first weeks
+(`startOfWeek`), ISO week numbers (`isoWeek`), day-before-month. `settings.ui.locale` (`en-GB` | `sv-SE`) only changes
+the language of weekday/month names. Never call `toLocale*String` directly in components.
+
+## Calendar UI (src/lib/components)
+`Calendar.svelte` (toolbar, quick add, rail with `MiniMonth` + calendars + open invitations) hosts `TimeGrid` (day/week:
+overlap column packing from `layoutDay`, drag to move/resize, drag on empty space to create), `MonthGrid` (6×7, HTML5
+drag to another day) and `AgendaList`. State in `state/calendar.svelte.ts`: `view` + `anchor` → `period`; `events` is
+everything loaded this session and `visible` applies the account filter and hidden calendars. `EventComposer` handles
+create and edit (occurrence or series) including recurrence presets (`presetRecurrence`), and `util/quickadd.ts` parses
+natural-language input (tests: `bun test src`).

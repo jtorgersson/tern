@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { calendar } from "$lib/state/calendar.svelte";
   import { app } from "$lib/state/app.svelte";
   import { toasts } from "$lib/state/toasts.svelte";
   import { api } from "$lib/api";
@@ -222,29 +223,79 @@
           {/if}
         {:else if app.settingsSection === "calendar"}
           <h2>Calendar</h2>
-          <p class="lead">Your Outlook calendar shows up on Today and in the Calendar view, and the agent can find times and send invitations.</p>
+          <p class="lead">Your Outlook calendars show up on Today and in the Calendar view, and the agent can find times, send invitations and move meetings. Times are always 24-hour and weeks start on Monday.</p>
+          <div class="opt-row">
+            <div><b>Default view</b><span class="hint">What the Calendar opens with</span></div>
+            <div class="seg">
+              {#each [["day", "Day"], ["week", "Week"], ["month", "Month"], ["agenda", "Agenda"]] as [v, l]}
+                <button class:on={(s.calendar.defaultView ?? "week") === v} onclick={() => app.patchSettings((st) => (st.calendar.defaultView = v as typeof st.calendar.defaultView))}>{l}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="opt-row">
+            <div><b>Week numbers</b><span class="hint">ISO weeks in the week and month views</span></div>
+            <div class="seg">
+              <button class:on={s.calendar.showWeekNumbers !== false} onclick={() => app.patchSettings((st) => (st.calendar.showWeekNumbers = true))}>Show</button>
+              <button class:on={s.calendar.showWeekNumbers === false} onclick={() => app.patchSettings((st) => (st.calendar.showWeekNumbers = false))}>Hide</button>
+            </div>
+          </div>
+          <div class="opt-row">
+            <div><b>Weekends</b><span class="hint">Saturday and Sunday columns</span></div>
+            <div class="seg">
+              <button class:on={s.calendar.showWeekends !== false} onclick={() => app.patchSettings((st) => (st.calendar.showWeekends = true))}>Show</button>
+              <button class:on={s.calendar.showWeekends === false} onclick={() => app.patchSettings((st) => (st.calendar.showWeekends = false))}>Hide</button>
+            </div>
+          </div>
           <div class="opt-row">
             <div><b>Meeting reminder</b><span class="hint">Desktop notification before a meeting starts</span></div>
             <div class="seg">
               {#each [0, 2, 5, 10, 15] as n}
-                <button class:on={(s.calendar?.reminderMinutes ?? 5) === n} onclick={() => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), reminderMinutes: n }))}>
+                <button class:on={(s.calendar?.reminderMinutes ?? 5) === n} onclick={() => app.patchSettings((st) => (st.calendar.reminderMinutes = n))}>
                   {n === 0 ? "Off" : `${n} min`}
                 </button>
               {/each}
             </div>
           </div>
+          <h3>New events</h3>
+          <div class="grid2">
+            <label>
+              <span class="label">Default length</span>
+              <select class="field" value={String(s.calendar.defaultDurationMins ?? 30)} onchange={(e) => app.patchSettings((st) => (st.calendar.defaultDurationMins = Number((e.currentTarget as HTMLSelectElement).value)))}>
+                {#each [15, 20, 25, 30, 45, 50, 60, 90] as n}<option value={String(n)}>{n} min</option>{/each}
+              </select>
+            </label>
+            <label>
+              <span class="label">Default reminder</span>
+              <select class="field" value={String(s.calendar.defaultReminderMinutes ?? 15)} onchange={(e) => app.patchSettings((st) => (st.calendar.defaultReminderMinutes = Number((e.currentTarget as HTMLSelectElement).value)))}>
+                <option value="-1">None</option>
+                {#each [0, 5, 10, 15, 30, 60] as n}<option value={String(n)}>{n === 0 ? "At start" : `${n} min before`}</option>{/each}
+              </select>
+            </label>
+          </div>
           <h3>Working hours</h3>
-          <p class="hint">Used when Tern looks for free time — for you and for the agent's proposals.</p>
+          <p class="hint">Shaded in the week view and used when Tern looks for free time — for you and for the agent's proposals.</p>
           <div class="grid2">
             <label>
               <span class="label">Start</span>
-              <input type="time" class="field mono" value={s.calendar?.workStart ?? "09:00"} onchange={(e) => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), workStart: (e.currentTarget as HTMLInputElement).value || "09:00" }))} />
+              <input type="time" class="field mono" value={s.calendar?.workStart ?? "09:00"} onchange={(e) => app.patchSettings((st) => (st.calendar.workStart = (e.currentTarget as HTMLInputElement).value || "09:00"))} />
             </label>
             <label>
               <span class="label">End</span>
-              <input type="time" class="field mono" value={s.calendar?.workEnd ?? "17:00"} onchange={(e) => app.patchSettings((st) => (st.calendar = { ...(st.calendar ?? { workStart: "09:00", workEnd: "17:00", reminderMinutes: 5 }), workEnd: (e.currentTarget as HTMLInputElement).value || "17:00" }))} />
+              <input type="time" class="field mono" value={s.calendar?.workEnd ?? "17:00"} onchange={(e) => app.patchSettings((st) => (st.calendar.workEnd = (e.currentTarget as HTMLInputElement).value || "17:00"))} />
             </label>
           </div>
+          {#if calendar.calendars.length}
+            <h3>Calendars</h3>
+            <p class="hint">Untick a calendar to hide its events everywhere in Tern.</p>
+            <div class="cal-list">
+              {#each calendar.calendars as c (c.id)}
+                <label class="toggle">
+                  <input type="checkbox" checked={!calendar.hidden.has(c.id)} onchange={() => calendar.toggleCalendar(c.id)} />
+                  <span><span class="sw" style:background={calendar.colorOf({ calendarId: c.id, accountId: c.accountId })}></span><b>{c.name}</b>{#if app.accounts.length > 1} <span class="hint">{app.accountById.get(c.accountId)?.email}</span>{/if}{#if c.owner && !c.isDefault} <span class="hint">shared by {c.owner}</span>{/if}{#if !c.canEdit} <span class="hint">read-only</span>{/if}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
         {:else if app.settingsSection === "appearance"}
           <h2>Appearance</h2>
           <p class="lead">Colors follow your Omarchy theme{app.theme ? ` (${app.theme.name})` : ""} and update live when you switch.</p>
@@ -253,6 +304,13 @@
             <div class="seg">
               <button class:on={s.ui.density === "comfortable"} onclick={() => setUi("density", "comfortable")}>Comfortable</button>
               <button class:on={s.ui.density === "compact"} onclick={() => setUi("density", "compact")}>Compact</button>
+            </div>
+          </div>
+          <div class="opt-row">
+            <div><b>Date language</b><span class="hint">Names of days and months. The clock is always 24-hour; weeks start on Monday.</span></div>
+            <div class="seg">
+              <button class:on={(s.ui.locale ?? "en-GB") === "en-GB"} onclick={() => setUi("locale", "en-GB")}>English</button>
+              <button class:on={s.ui.locale === "sv-SE"} onclick={() => setUi("locale", "sv-SE")}>Svenska</button>
             </div>
           </div>
           <div class="opt-row">
@@ -593,5 +651,18 @@
   }
   .err {
     color: var(--red);
+  }
+  .cal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .sw {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-right: 7px;
+    vertical-align: -1px;
   }
 </style>

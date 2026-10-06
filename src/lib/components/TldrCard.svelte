@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { dayMonth } from "$lib/util/fmt";
   import { app, CATEGORY_META } from "$lib/state/app.svelte";
   import { summarizeThread } from "$lib/ai";
   import { readerBus } from "$lib/keys";
@@ -65,7 +66,7 @@
       {#if cat && note}
         <span class="chip" style:color={cat.color} style:background="color-mix(in oklab, {cat.color} 14%, transparent)">{cat.label}</span>
         {#if note.priority === 3}<span class="chip prio">High priority</span>{/if}
-        {#if note.dueAt}<span class="chip due">Due {new Date(note.dueAt).toLocaleDateString([], { day: "numeric", month: "short" })}</span>{/if}
+        {#if note.dueAt}<span class="chip due">Due {dayMonth(note.dueAt)}</span>{/if}
       {/if}
       <span class="spacer"></span>
       {#if busy}

@@ -7,7 +7,7 @@
   import MessageList from "$lib/components/MessageList.svelte";
   import Reader from "$lib/components/Reader.svelte";
   import Today from "$lib/components/Today.svelte";
-  import Agenda from "$lib/components/Agenda.svelte";
+  import Calendar from "$lib/components/Calendar.svelte";
   import EventComposer from "$lib/components/EventComposer.svelte";
   import EventDetails from "$lib/components/EventDetails.svelte";
   import Composer from "$lib/components/Composer.svelte";
@@ -76,8 +76,8 @@
       <Sidebar />
       {#if app.view.kind === "today"}
         <Today />
-      {:else if app.view.kind === "agenda"}
-        <Agenda />
+      {:else if app.view.kind === "calendar"}
+        <Calendar />
       {:else}
         <MessageList />
         <!-- svelte-ignore a11y_no_static_element_interactions -->

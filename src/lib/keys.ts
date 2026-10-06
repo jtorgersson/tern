@@ -14,6 +14,11 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "Enter / o", label: "Open message", group: "Navigate" },
   { keys: "g t", label: "Go to Today", group: "Navigate" },
   { keys: "g c", label: "Go to Calendar", group: "Navigate" },
+  { keys: "d / w / m / a", label: "Calendar: day / week / month / agenda", group: "Navigate" },
+  { keys: "h / l", label: "Calendar: previous / next period", group: "Navigate" },
+  { keys: "t", label: "Calendar: today", group: "Navigate" },
+  { keys: "n", label: "Calendar: new event", group: "Compose" },
+  { keys: "e", label: "Calendar: edit event", group: "Act" },
   { keys: "g i", label: "Go to inbox", group: "Navigate" },
   { keys: "g s", label: "Go to sent", group: "Navigate" },
   { keys: "g d", label: "Go to drafts", group: "Navigate" },
@@ -110,7 +115,7 @@ export function handleKey(e: KeyboardEvent) {
       d: () => app.setView({ kind: "unified", wellKnown: "drafts" }),
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
       t: () => app.setView({ kind: "today" }),
-      c: () => app.setView({ kind: "agenda" }),
+      c: () => app.setView({ kind: "calendar" }),
       x: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),
       f: () => app.setView({ kind: "flagged" }),
       r: () => app.setView({ kind: "category", category: "needs_reply" }),
@@ -122,7 +127,8 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
 
-  if (app.view.kind === "agenda") {
+  if (app.view.kind === "calendar") {
+    const sel = calendar.selected;
     const cal: Record<string, () => void> = {
       j: () => calendar.moveSelection(1),
       ArrowDown: () => calendar.moveSelection(1),
@@ -132,7 +138,18 @@ export function handleKey(e: KeyboardEvent) {
       o: () => calendar.selectedId && calendar.openDetails(calendar.selectedId),
       n: () => calendar.openComposer(),
       c: () => composer.compose(),
-      a: () => app.toggleAgent(true),
+      e: () => sel && calendar.openEditor(sel),
+      "#": () => sel && calendar.requestDelete(sel),
+      Delete: () => sel && calendar.requestDelete(sel),
+      d: () => calendar.setView("day"),
+      w: () => calendar.setView("week"),
+      m: () => calendar.setView("month"),
+      a: () => calendar.setView("agenda"),
+      h: () => calendar.prev(),
+      ArrowLeft: () => calendar.prev(),
+      l: () => calendar.next(),
+      ArrowRight: () => calendar.next(),
+      t: () => calendar.today(),
       "/": () => app.searchFocusTick++,
       "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
       g: () => {

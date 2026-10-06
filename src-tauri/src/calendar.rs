@@ -3,14 +3,16 @@ use crate::graph;
 use crate::model::*;
 use crate::state::AppState;
 use anyhow::Result;
-use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc, Weekday};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc, Weekday};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-const WINDOW_BACK_DAYS: i64 = 7;
-const WINDOW_AHEAD_DAYS: i64 = 21;
+/// Window kept fresh by the periodic sync. Anything outside is fetched on demand (`fetch_range`).
+pub const WINDOW_BACK_DAYS: i64 = 14;
+pub const WINDOW_AHEAD_DAYS: i64 = 45;
 const FMT: &str = "%Y-%m-%dT%H:%M:%S";
 
 /// IANA name of the system zone (what Graph renders event times in).
@@ -38,16 +40,84 @@ pub fn parse(s: &str) -> Option<NaiveDateTime> {
         .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().map(|d| d.and_hms_opt(0, 0, 0).unwrap()))
 }
 
-pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account) -> Result<()> {
+fn to_utc_str(t: NaiveDateTime) -> String {
+    match Local.from_local_datetime(&t).earliest() {
+        Some(l) => l.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        None => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    }
+}
+
+/// Refreshes the calendar list and downloads [from, to) from every calendar of the account into the cache.
+async fn pull_range(st: &AppState, acc: &Account, from: NaiveDateTime, to: NaiveDateTime) -> Result<Vec<CalEvent>> {
     let tz = local_tz();
-    let now = Local::now();
-    let from = now - Duration::days(WINDOW_BACK_DAYS);
-    let to = now + Duration::days(WINDOW_AHEAD_DAYS);
-    let utc = |t: chrono::DateTime<Local>| t.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let events = graph::calendar_view(st, &acc.id, &tz, &utc(from), &utc(to)).await?;
-    st.db.replace_events(&acc.id, &fmt(from.naive_local()), &fmt(to.naive_local()), &events)?;
+    let (from_utc, to_utc) = (to_utc_str(from), to_utc_str(to));
+    // Calendars list: tenants that block it still get the default calendar.
+    let cals = match graph::calendars(st, &acc.id).await {
+        Ok(c) if !c.is_empty() => c,
+        Ok(_) => vec![],
+        Err(e) => {
+            log::warn!("calendars list failed for {}: {e:#}", acc.email);
+            st.db.calendars(Some(&acc.id)).unwrap_or_default()
+        }
+    };
+    let mut events = Vec::new();
+    if cals.is_empty() {
+        events = graph::calendar_view(st, &acc.id, None, &tz, &from_utc, &to_utc).await?;
+    } else {
+        st.db.replace_calendars(&acc.id, &cals)?;
+        let mut first_err: Option<anyhow::Error> = None;
+        for c in &cals {
+            match graph::calendar_view(st, &acc.id, Some(&c.id), &tz, &from_utc, &to_utc).await {
+                Ok(list) => events.extend(list),
+                // A single broken shared calendar must not hide the others.
+                Err(e) => {
+                    log::warn!("calendarView failed for {} / {}: {e:#}", acc.email, c.name);
+                    if c.is_default {
+                        first_err.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        if let (Some(e), true) = (first_err, events.is_empty()) {
+            return Err(e);
+        }
+    }
+    // The same event can show up in two calendars only for shared copies; keep the first.
+    let mut seen = HashSet::new();
+    events.retain(|e| seen.insert(e.id.clone()));
+    events.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+    st.db.replace_events(&acc.id, &fmt(from), &fmt(to), &events)?;
+    Ok(events)
+}
+
+pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account) -> Result<()> {
+    let now = now_local();
+    let from = (now - Duration::days(WINDOW_BACK_DAYS)).date().and_hms_opt(0, 0, 0).unwrap();
+    let to = (now + Duration::days(WINDOW_AHEAD_DAYS)).date().and_hms_opt(0, 0, 0).unwrap();
+    pull_range(st, acc, from, to).await?;
     let _ = app.emit("calendar://changed", serde_json::json!({ "accountId": acc.id }));
     Ok(())
+}
+
+/// On-demand download of an arbitrary range (navigating months ahead / back). Returns the cached events for it.
+pub async fn fetch_range(app: &AppHandle, st: &AppState, from: &str, to: &str, account_id: Option<&str>) -> Result<Vec<CalEvent>> {
+    let f = parse(from).ok_or_else(|| anyhow::anyhow!("bad from"))?;
+    let t = parse(to).ok_or_else(|| anyhow::anyhow!("bad to"))?;
+    if t <= f || (t - f).num_days() > 400 {
+        anyhow::bail!("range must be between 1 day and 400 days");
+    }
+    let accounts: Vec<Account> = st.db.accounts()?.into_iter().filter(|a| account_id.map_or(true, |id| a.id == id)).collect();
+    let mut changed = false;
+    for acc in &accounts {
+        match pull_range(st, acc, f, t).await {
+            Ok(_) => changed = true,
+            Err(e) => log::warn!("calendar range fetch failed for {}: {e:#}", acc.email),
+        }
+    }
+    if changed {
+        let _ = app.emit("calendar://changed", serde_json::json!({ "accountId": Value::Null, "range": [from, to] }));
+    }
+    Ok(st.db.events(from, to, account_id)?)
 }
 
 pub async fn invite(st: &AppState, message_id: &str) -> Result<Option<InviteInfo>> {

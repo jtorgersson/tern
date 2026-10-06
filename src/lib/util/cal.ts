@@ -1,6 +1,8 @@
 // Calendar time helpers. CalEvent.start/end are local wall-clock ISO strings without offset
 // ("2026-10-07T09:00:00"), so `new Date(s)` parses them in the machine's zone.
-import type { CalEvent } from "$lib/types";
+import type { CalEvent, Recurrence, Weekday } from "$lib/types";
+import { dayMonth, hhmm, weekdayDayMonth, weekdayLong, word, startOfWeek as sow } from "./fmt";
+export { startOfWeek, isoWeek } from "./fmt";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -31,14 +33,15 @@ export function minutesBetween(a: string | Date, b: string | Date): number {
   return Math.round((tb - ta) / 60_000);
 }
 
-export function hm(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** "09:05" (24-hour). */
+export function hm(iso: string | Date): string {
+  return hhmm(iso);
 }
 
 /** "09:00 – 10:30" */
 export function timeRange(ev: Pick<CalEvent, "start" | "end" | "isAllDay">): string {
-  if (ev.isAllDay) return "All day";
-  return `${hm(ev.start)} – ${hm(ev.end)}`;
+  if (ev.isAllDay) return word("allDay");
+  return `${hm(ev.start)}–${hm(ev.end)}`;
 }
 
 /** "1h 30m", "45m", "2 days" */
@@ -73,22 +76,27 @@ export function untilLabel(ev: Pick<CalEvent, "start" | "end">, now = new Date()
 /** Weekday + date, with "Today"/"Tomorrow" shortcuts. */
 export function dayLabel(d: Date, now = new Date()): string {
   const k = dayKey(d);
-  if (k === dayKey(now)) return "Today";
-  if (k === dayKey(addDays(startOfDay(now), 1))) return "Tomorrow";
-  return d.toLocaleDateString([], { weekday: "long" });
+  if (k === dayKey(now)) return word("today");
+  if (k === dayKey(addDays(startOfDay(now), 1))) return word("tomorrow");
+  if (k === dayKey(addDays(startOfDay(now), -1))) return word("yesterday");
+  return weekdayLong(d);
 }
 
 export function dateLabel(d: Date): string {
-  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+  return dayMonth(d);
 }
 
 /** "Wed 8 Oct, 10:00 – 11:00 (1h)" — used in agent previews and the invite card. */
 export function whenLabel(ev: Pick<CalEvent, "start" | "end" | "isAllDay">): string {
   const d = new Date(ev.start);
-  const day = d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const day = weekdayDayMonth(d);
   if (ev.isAllDay) {
     const days = Math.round(minutesBetween(ev.start, ev.end) / 1440);
-    return days > 1 ? `${day} – ${new Date(new Date(ev.end).getTime() - 1).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} · all day` : `${day} · all day`;
+    return days > 1 ? `${day} – ${weekdayDayMonth(new Date(new Date(ev.end).getTime() - 1))} · ${word("allDay")}` : `${day} · ${word("allDay")}`;
+  }
+  // Multi-day timed event: show both dates.
+  if (dayKey(ev.start) !== dayKey(new Date(new Date(ev.end).getTime() - 1))) {
+    return `${day} ${hm(ev.start)} – ${weekdayDayMonth(ev.end)} ${hm(ev.end)}`;
   }
   return `${day}, ${timeRange(ev)} (${durationLabel(ev.start, ev.end)})`;
 }
@@ -162,4 +170,188 @@ export const RESPONSE_LABEL: Record<CalEvent["response"], string> = {
   tentativelyAccepted: "Tentative",
   declined: "Declined",
   notResponded: "Not responded",
+};
+
+// ---------- period helpers ----------
+
+export function addMonths(d: Date, n: number): Date {
+  const x = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  // Keep the day of month where possible (31 Jan + 1 month → 28/29 Feb).
+  const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate();
+  x.setDate(Math.min(d.getDate(), last));
+  return x;
+}
+
+export function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+export function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/** Monday-first 6×7 grid covering the month (always 42 days so the layout never jumps). */
+export function monthGrid(d: Date): Date[] {
+  const first = sow(startOfMonth(d));
+  return Array.from({ length: 42 }, (_, i) => addDays(first, i));
+}
+
+/** Mon..Sun of the week containing `d`. */
+export function weekDays(d: Date, includeWeekends = true): Date[] {
+  const first = sow(d);
+  return Array.from({ length: includeWeekends ? 7 : 5 }, (_, i) => addDays(first, i));
+}
+
+/** Minutes since local midnight of `day` (negative / >1440 when the time falls on another day). */
+export function minutesIntoDay(iso: string, day: Date): number {
+  return Math.round((new Date(iso).getTime() - startOfDay(day).getTime()) / 60_000);
+}
+
+export interface Placed<T> {
+  item: T;
+  /** Column index and total columns inside the overlap cluster (for side-by-side layout). */
+  col: number;
+  cols: number;
+  top: number; // minutes from day start
+  bottom: number;
+}
+
+/**
+ * Lays out timed events of one day side by side where they overlap (classic calendar column packing).
+ * Events are clipped to the day: [0, 1440].
+ */
+export function layoutDay<T extends Pick<CalEvent, "start" | "end">>(events: T[], day: Date, minHeightMins = 20): Placed<T>[] {
+  const items = events
+    .map((e) => {
+      const top = Math.max(0, minutesIntoDay(e.start, day));
+      const bottom = Math.min(1440, Math.max(top + minHeightMins, minutesIntoDay(e.end, day)));
+      return { item: e, col: 0, cols: 1, top, bottom };
+    })
+    .sort((a, b) => a.top - b.top || b.bottom - a.bottom);
+  // Build clusters of transitively overlapping events, assign columns greedily.
+  let cluster: Placed<T>[] = [];
+  let clusterEnd = -1;
+  const flush = () => {
+    const cols = Math.max(1, ...cluster.map((p) => p.col + 1));
+    for (const p of cluster) p.cols = cols;
+    cluster = [];
+  };
+  for (const p of items) {
+    if (cluster.length && p.top >= clusterEnd) flush();
+    const taken = new Set(cluster.filter((o) => o.bottom > p.top).map((o) => o.col));
+    let c = 0;
+    while (taken.has(c)) c++;
+    p.col = c;
+    cluster.push(p);
+    clusterEnd = Math.max(clusterEnd, p.bottom);
+  }
+  flush();
+  return items;
+}
+
+/** Snap minutes to a grid step. */
+export function snap(mins: number, step = 15): number {
+  return Math.round(mins / step) * step;
+}
+
+// ---------- recurrence ----------
+
+const WD: Weekday[] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+export function weekdayOf(d: Date): Weekday {
+  return WD[(d.getDay() + 6) % 7];
+}
+
+const WD_LABEL: Record<Weekday, string> = {
+  monday: "Mon",
+  tuesday: "Tue",
+  wednesday: "Wed",
+  thursday: "Thu",
+  friday: "Fri",
+  saturday: "Sat",
+  sunday: "Sun",
+};
+
+/** "Every week on Tue, Thu until 18 Dec" */
+export function recurrenceLabel(r: Recurrence | null | undefined): string {
+  if (!r?.pattern) return "";
+  const p = r.pattern;
+  const n = p.interval || 1;
+  const every = (unit: string) => (n === 1 ? `Every ${unit}` : `Every ${n} ${unit}s`);
+  let s: string;
+  switch (p.type) {
+    case "daily":
+      s = every("day");
+      break;
+    case "weekly": {
+      const days = (p.daysOfWeek ?? []).map((d) => WD_LABEL[d]);
+      const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+      const isWeekdays = days.length === 5 && weekdays.every((d) => days.includes(d));
+      s = isWeekdays && n === 1 ? "Every weekday" : `${every("week")}${days.length ? ` on ${days.join(", ")}` : ""}`;
+      break;
+    }
+    case "absoluteMonthly":
+      s = `${every("month")} on day ${p.dayOfMonth}`;
+      break;
+    case "relativeMonthly":
+      s = `${every("month")} on the ${p.index ?? "first"} ${(p.daysOfWeek ?? []).map((d) => WD_LABEL[d]).join("/")}`;
+      break;
+    case "absoluteYearly":
+    case "relativeYearly":
+      s = every("year");
+      break;
+    default:
+      s = "Repeats";
+  }
+  if (r.range?.type === "endDate" && r.range.endDate) s += ` until ${dayMonth(r.range.endDate + "T00:00:00")}`;
+  else if (r.range?.type === "numbered" && r.range.numberOfOccurrences) s += `, ${r.range.numberOfOccurrences} times`;
+  return s;
+}
+
+export type RepeatPreset = "none" | "daily" | "weekdays" | "weekly" | "biweekly" | "monthly" | "yearly";
+
+/** Builds a Graph recurrence from a simple preset anchored on `start`. */
+export function presetRecurrence(preset: RepeatPreset, start: Date, until: string | null = null): Recurrence | null {
+  if (preset === "none") return null;
+  const range: Recurrence["range"] = until ? { type: "endDate", startDate: dayKey(start), endDate: until } : { type: "noEnd", startDate: dayKey(start) };
+  const wd = weekdayOf(start);
+  switch (preset) {
+    case "daily":
+      return { pattern: { type: "daily", interval: 1 }, range };
+    case "weekdays":
+      return { pattern: { type: "weekly", interval: 1, daysOfWeek: ["monday", "tuesday", "wednesday", "thursday", "friday"], firstDayOfWeek: "monday" }, range };
+    case "weekly":
+      return { pattern: { type: "weekly", interval: 1, daysOfWeek: [wd], firstDayOfWeek: "monday" }, range };
+    case "biweekly":
+      return { pattern: { type: "weekly", interval: 2, daysOfWeek: [wd], firstDayOfWeek: "monday" }, range };
+    case "monthly":
+      return { pattern: { type: "absoluteMonthly", interval: 1, dayOfMonth: start.getDate() }, range };
+    case "yearly":
+      return { pattern: { type: "absoluteYearly", interval: 1, dayOfMonth: start.getDate(), month: start.getMonth() + 1 }, range };
+  }
+}
+
+/** Reverse of presetRecurrence (best effort) so the composer can show the current rule as a preset. */
+export function recurrencePreset(r: Recurrence | null | undefined): RepeatPreset | "custom" {
+  if (!r?.pattern) return "none";
+  const p = r.pattern;
+  if (p.type === "daily" && (p.interval ?? 1) === 1) return "daily";
+  if (p.type === "weekly") {
+    const d = p.daysOfWeek ?? [];
+    if ((p.interval ?? 1) === 1 && d.length === 5 && !d.includes("saturday") && !d.includes("sunday")) return "weekdays";
+    if (d.length === 1 && (p.interval ?? 1) === 1) return "weekly";
+    if (d.length === 1 && p.interval === 2) return "biweekly";
+  }
+  if (p.type === "absoluteMonthly" && (p.interval ?? 1) === 1) return "monthly";
+  if (p.type === "absoluteYearly" && (p.interval ?? 1) === 1) return "yearly";
+  return "custom";
+}
+
+export const SHOW_AS_LABEL: Record<CalEvent["showAs"], string> = {
+  free: "Free",
+  tentative: "Tentative",
+  busy: "Busy",
+  oof: "Out of office",
+  workingElsewhere: "Working elsewhere",
+  unknown: "",
 };

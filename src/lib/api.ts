@@ -4,7 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Account,
   CalEvent,
+  Calendar,
+  EditScope,
   EventDraft,
+  EventFull,
+  EventPatch,
   FreeSlot,
   FreeSlotQuery,
   InviteAction,
@@ -75,7 +79,7 @@ export const api = {
   /** Inbox messages with a triage deadline, soonest first (includes overdue up to 7 days). */
   due: (limit = 20) => invoke<MessageSummary[]>("messages_due", { limit }),
 
-  // ---- Calendar (cached window: 7 days back … 21 days ahead, refreshed every sync) ----
+  // ---- Calendar (cached window: 14 days back … 45 days ahead, refreshed every sync; other ranges on demand) ----
   /** Events with start < to and end > from (local ISO bounds), sorted by start. */
   calendarEvents: (from: string, to: string, accountId?: string | null) =>
     invoke<CalEvent[]>("calendar_events", { from, to, accountId: accountId ?? null }),
@@ -87,4 +91,16 @@ export const api = {
     invoke<void>("invite_respond", { accountId, eventId, action, comment, sendResponse }),
   eventCreate: (draft: EventDraft) => invoke<CalEvent>("event_create", { draft }),
   freeSlots: (query: FreeSlotQuery) => invoke<FreeSlot[]>("calendar_free_slots", { query }),
+  /** The user's calendars (all accounts unless filtered), default calendar first. */
+  calendars: (accountId?: string | null) => invoke<Calendar[]>("calendar_list", { accountId: accountId ?? null }),
+  /** Downloads [from, to) from the server into the cache and returns it. Max 400 days. */
+  calendarFetchRange: (from: string, to: string, accountId?: string | null) =>
+    invoke<CalEvent[]>("calendar_fetch_range", { from, to, accountId: accountId ?? null }),
+  /** Full body + recurrence rule, fetched live. */
+  eventGet: (accountId: string, eventId: string) => invoke<EventFull>("event_get", { accountId, eventId }),
+  eventUpdate: (accountId: string, eventId: string, patch: EventPatch, scope: EditScope = "occurrence") =>
+    invoke<CalEvent>("event_update", { accountId, eventId, patch, scope }),
+  /** Deletes; when the user organizes a meeting with attendees it is cancelled (attendees notified, optional note). */
+  eventDelete: (accountId: string, eventId: string, scope: EditScope = "occurrence", comment: string | null = null) =>
+    invoke<void>("event_delete", { accountId, eventId, scope, comment }),
 };

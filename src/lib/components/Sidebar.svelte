@@ -114,7 +114,7 @@
         <span class="name">Today</span>
         {#if today.needsReply.length}<span class="count strong">{today.needsReply.length}</span>{/if}
       </button>
-      <button class="item" class:active={isActive({ kind: "agenda" })} onclick={() => app.setView({ kind: "agenda" })}>
+      <button class="item" class:active={isActive({ kind: "calendar" })} onclick={() => app.setView({ kind: "calendar" })}>
         <CalendarDays size={15} />
         <span class="name">Calendar</span>
         {#if calendar.unanswered.length}<span class="count strong" title="Invitations awaiting your response">{calendar.unanswered.length}</span>{:else if calendar.todayMeetings.length}<span class="count">{calendar.todayMeetings.length}</span>{/if}

@@ -1,3 +1,5 @@
+import { dayMonth, dayMonthYear, dateTimeLong, hhmm, weekdayShort } from "./fmt";
+
 const DAY = 86_400_000;
 
 function startOfDay(d: Date): number {
@@ -10,25 +12,18 @@ export function shortTime(iso: string, now = new Date()): string {
   if (Number.isNaN(d.getTime())) return "";
   const today = startOfDay(now);
   const t = d.getTime();
-  if (t >= today) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (t >= today - DAY) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (t >= today - 6 * DAY) return d.toLocaleDateString([], { weekday: "short" });
-  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString([], { day: "numeric", month: "short" });
-  return d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+  if (t >= today) return hhmm(d);
+  if (t >= today - DAY) return hhmm(d);
+  if (t >= today - 6 * DAY) return weekdayShort(d);
+  if (d.getFullYear() === now.getFullYear()) return dayMonth(d);
+  return dayMonthYear(d);
 }
 
 /** Full reader timestamp. */
 export function longTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString([], {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return dateTimeLong(d);
 }
 
 export function relative(iso: string | null, now = Date.now()): string {

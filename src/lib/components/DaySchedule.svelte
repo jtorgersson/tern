@@ -2,7 +2,7 @@
   // "Your day" on Today: today's events as a timeline with a now-marker and the next meeting highlighted.
   import { app } from "$lib/state/app.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
-  import { toLocalIso, isPast } from "$lib/util/cal";
+  import { toLocalIso, isPast, hm } from "$lib/util/cal";
   import EventRow from "./EventRow.svelte";
   import { CalendarDays, ArrowRight, Plus } from "@lucide/svelte";
 
@@ -28,7 +28,7 @@
     {#if calendar.todayMeetings.length}<span class="n">{calendar.todayMeetings.length}</span>{/if}
     <span class="spacer"></span>
     <button class="mini" onclick={() => calendar.openComposer()}><Plus size={12} /> New event</button>
-    <button class="mini" onclick={() => app.setView({ kind: "agenda" })}>Week <ArrowRight size={12} /></button>
+    <button class="mini" onclick={() => app.setView({ kind: "calendar" })}>Calendar <ArrowRight size={12} /></button>
   </div>
 
   <div class="card">
@@ -47,12 +47,12 @@
       <div class="list">
         {#each timed as e, i (e.id)}
           {#if showNow && i === nowIndex}
-            <div class="now" aria-label="Now"><span class="dot"></span><span class="line"></span><span class="lbl mono">{calendar.now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+            <div class="now" aria-label="Now"><span class="dot"></span><span class="line"></span><span class="lbl mono">{hm(calendar.now)}</span></div>
           {/if}
           <EventRow ev={e} highlight={e.id === nextId} overlap={overlapIds.has(e.id)} {showAccount} />
         {/each}
         {#if showNow && nowIndex === timed.length}
-          <div class="now end" aria-label="Now"><span class="dot"></span><span class="line"></span><span class="lbl mono">{calendar.now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+          <div class="now end" aria-label="Now"><span class="dot"></span><span class="line"></span><span class="lbl mono">{hm(calendar.now)}</span></div>
         {/if}
       </div>
     {/if}

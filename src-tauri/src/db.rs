@@ -117,9 +117,26 @@ CREATE TABLE IF NOT EXISTS events (
   web_link TEXT,
   preview TEXT NOT NULL DEFAULT '',
   series_master_id TEXT,
-  response_requested INTEGER NOT NULL DEFAULT 1
+  response_requested INTEGER NOT NULL DEFAULT 1,
+  calendar_id TEXT NOT NULL DEFAULT '',
+  event_type TEXT NOT NULL DEFAULT 'singleInstance',
+  reminder_minutes INTEGER,
+  sensitivity TEXT NOT NULL DEFAULT 'normal',
+  importance TEXT NOT NULL DEFAULT 'normal',
+  categories_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS events_acc_start ON events(account_id, start_local);
+
+CREATE TABLE IF NOT EXISTS calendars (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  can_edit INTEGER NOT NULL DEFAULT 1,
+  owner TEXT,
+  sort INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   subject, sender, preview, body,
@@ -142,7 +159,56 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN meeting_type TEXT")?;
     }
+    for (col, ddl) in [
+        ("calendar_id", "TEXT NOT NULL DEFAULT ''"),
+        ("event_type", "TEXT NOT NULL DEFAULT 'singleInstance'"),
+        ("reminder_minutes", "INTEGER"),
+        ("sensitivity", "TEXT NOT NULL DEFAULT 'normal'"),
+        ("importance", "TEXT NOT NULL DEFAULT 'normal'"),
+        ("categories_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ] {
+        let has: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = ?1")?
+            .exists([col])?;
+        if !has {
+            conn.execute_batch(&format!("ALTER TABLE events ADD COLUMN {col} {ddl}"))?;
+        }
+    }
     Ok(())
+}
+
+const EVENT_COLS: &str = "id, account_id, subject, start_local, end_local, tz, is_all_day, is_cancelled, location, organizer_json, \
+  attendees_json, response, show_as, is_online, join_url, web_link, preview, series_master_id, response_requested, \
+  calendar_id, event_type, reminder_minutes, sensitivity, importance, categories_json";
+
+fn row_event(r: &Row) -> rusqlite::Result<CalEvent> {
+    Ok(CalEvent {
+        id: r.get(0)?,
+        account_id: r.get(1)?,
+        subject: r.get(2)?,
+        start: r.get(3)?,
+        end: r.get(4)?,
+        time_zone: r.get(5)?,
+        is_all_day: r.get::<_, i64>(6)? != 0,
+        is_cancelled: r.get::<_, i64>(7)? != 0,
+        location: r.get(8)?,
+        organizer: r.get::<_, Option<String>>(9)?.and_then(|s| serde_json::from_str(&s).ok()),
+        attendees: serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default(),
+        response: r.get(11)?,
+        show_as: r.get(12)?,
+        is_online: r.get::<_, i64>(13)? != 0,
+        join_url: r.get(14)?,
+        web_link: r.get(15)?,
+        preview: r.get(16)?,
+        series_master_id: r.get(17)?,
+        response_requested: r.get::<_, i64>(18)? != 0,
+        calendar_id: r.get(19)?,
+        event_type: r.get(20)?,
+        reminder_minutes: r.get(21)?,
+        sensitivity: r.get(22)?,
+        importance: r.get(23)?,
+        categories: serde_json::from_str(&r.get::<_, String>(24)?).unwrap_or_default(),
+    })
 }
 
 const SUMMARY_COLS: &str = "m.id, m.account_id, m.folder_id, m.conversation_id, m.subject, m.from_name, m.from_email, \
@@ -746,15 +812,17 @@ impl Db {
             let mut st = tx.prepare(
                 "INSERT OR REPLACE INTO events (id, account_id, subject, start_local, end_local, tz, is_all_day, is_cancelled,
                    location, organizer_json, attendees_json, response, show_as, is_online, join_url, web_link, preview,
-                   series_master_id, response_requested)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+                   series_master_id, response_requested, calendar_id, event_type, reminder_minutes, sensitivity, importance,
+                   categories_json)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
             )?;
             for e in events {
                 st.execute(params![
                     e.id, account_id, e.subject, e.start, e.end, e.time_zone, e.is_all_day as i64, e.is_cancelled as i64,
                     e.location, e.organizer.as_ref().map(serde_json::to_string).transpose()?,
                     serde_json::to_string(&e.attendees)?, e.response, e.show_as, e.is_online as i64, e.join_url,
-                    e.web_link, e.preview, e.series_master_id, e.response_requested as i64
+                    e.web_link, e.preview, e.series_master_id, e.response_requested as i64, e.calendar_id, e.event_type,
+                    e.reminder_minutes, e.sensitivity, e.importance, serde_json::to_string(&e.categories)?
                 ])?;
             }
         }
@@ -770,33 +838,65 @@ impl Db {
     pub fn events(&self, from: &str, to: &str, account_id: Option<&str>) -> Result<Vec<CalEvent>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT id, account_id, subject, start_local, end_local, tz, is_all_day, is_cancelled, location, organizer_json,
-                    attendees_json, response, show_as, is_online, join_url, web_link, preview, series_master_id, response_requested
-             FROM events WHERE start_local < ?1 AND end_local > ?2 AND (?3 IS NULL OR account_id = ?3)
-             ORDER BY start_local, end_local",
+            &format!("SELECT {EVENT_COLS} FROM events WHERE start_local < ?1 AND end_local > ?2 AND (?3 IS NULL OR account_id = ?3)
+             ORDER BY start_local, end_local"),
+        )?;
+        let rows = st.query_map(params![to, from, account_id], row_event)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn event(&self, id: &str) -> Result<Option<CalEvent>> {
+        let c = self.conn();
+        Ok(c.query_row(&format!("SELECT {EVENT_COLS} FROM events WHERE id = ?1"), [id], row_event).optional()?)
+    }
+
+    pub fn delete_event(&self, id: &str) -> Result<()> {
+        let c = self.conn();
+        c.execute("DELETE FROM events WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Drops every cached occurrence of a series (after the series was deleted / cancelled).
+    pub fn delete_series(&self, master_id: &str) -> Result<()> {
+        let c = self.conn();
+        c.execute("DELETE FROM events WHERE id = ?1 OR series_master_id = ?1", [master_id])?;
+        Ok(())
+    }
+
+    // ---------- calendars ----------
+    pub fn replace_calendars(&self, account_id: &str, cals: &[CalendarInfo]) -> Result<()> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM calendars WHERE account_id = ?1", [account_id])?;
+        {
+            let mut st = tx.prepare(
+                "INSERT INTO calendars (id, account_id, name, color, is_default, can_edit, owner, sort) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            )?;
+            for (i, k) in cals.iter().enumerate() {
+                st.execute(params![k.id, account_id, k.name, k.color, k.is_default as i64, k.can_edit as i64, k.owner, i as i64])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn calendars(&self, account_id: Option<&str>) -> Result<Vec<CalendarInfo>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT c.id, c.account_id, c.name, c.color, c.is_default, c.can_edit, c.owner FROM calendars c
+             JOIN accounts a ON a.id = c.account_id
+             WHERE (?1 IS NULL OR c.account_id = ?1) ORDER BY a.sort, a.created_at, c.is_default DESC, c.sort",
         )?;
         let rows = st
-            .query_map(params![to, from, account_id], |r| {
-                Ok(CalEvent {
+            .query_map(params![account_id], |r| {
+                Ok(CalendarInfo {
                     id: r.get(0)?,
                     account_id: r.get(1)?,
-                    subject: r.get(2)?,
-                    start: r.get(3)?,
-                    end: r.get(4)?,
-                    time_zone: r.get(5)?,
-                    is_all_day: r.get::<_, i64>(6)? != 0,
-                    is_cancelled: r.get::<_, i64>(7)? != 0,
-                    location: r.get(8)?,
-                    organizer: r.get::<_, Option<String>>(9)?.and_then(|s| serde_json::from_str(&s).ok()),
-                    attendees: serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default(),
-                    response: r.get(11)?,
-                    show_as: r.get(12)?,
-                    is_online: r.get::<_, i64>(13)? != 0,
-                    join_url: r.get(14)?,
-                    web_link: r.get(15)?,
-                    preview: r.get(16)?,
-                    series_master_id: r.get(17)?,
-                    response_requested: r.get::<_, i64>(18)? != 0,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                    is_default: r.get::<_, i64>(4)? != 0,
+                    can_edit: r.get::<_, i64>(5)? != 0,
+                    owner: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1019,6 +1119,8 @@ mod tests {
             time_zone: "Europe/Stockholm".into(), is_all_day: false, is_cancelled: false, location: None, organizer: None,
             attendees: vec![], response: "accepted".into(), show_as: "busy".into(), is_online: false, join_url: None,
             web_link: None, preview: String::new(), series_master_id: None, response_requested: true,
+            calendar_id: String::new(), event_type: "singleInstance".into(), reminder_minutes: Some(15),
+            sensitivity: "normal".into(), importance: "normal".into(), categories: vec![],
         }
     }
 

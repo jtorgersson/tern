@@ -182,6 +182,55 @@ pub struct CalEvent {
     pub preview: String,
     pub series_master_id: Option<String>,
     pub response_requested: bool,
+    /// Graph calendar id this event lives in ("" when unknown / legacy rows).
+    #[serde(default)]
+    pub calendar_id: String,
+    /// singleInstance | occurrence | exception | seriesMaster
+    #[serde(default = "default_event_type")]
+    pub event_type: String,
+    /// Minutes before start; None = reminder off.
+    #[serde(default)]
+    pub reminder_minutes: Option<i64>,
+    /// normal | personal | private | confidential
+    #[serde(default = "default_normal")]
+    pub sensitivity: String,
+    #[serde(default = "default_normal")]
+    pub importance: String,
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+fn default_event_type() -> String {
+    "singleInstance".into()
+}
+fn default_normal() -> String {
+    "normal".into()
+}
+
+/// One of the user's calendars (Graph `calendar` resource).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarInfo {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    /// "#rrggbb" when Outlook has a colour for it.
+    pub color: Option<String>,
+    pub is_default: bool,
+    pub can_edit: bool,
+    /// Owner address for shared calendars.
+    pub owner: Option<String>,
+}
+
+/// Full event as fetched on demand (body + recurrence).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventFull {
+    pub event: CalEvent,
+    pub body_html: String,
+    pub body_text: String,
+    /// Graph `patternedRecurrence` of the series (also filled in for occurrences).
+    pub recurrence: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,6 +256,68 @@ pub struct EventDraft {
     pub attendees: Vec<Addr>,
     #[serde(default)]
     pub is_online: bool,
+    /// Target calendar (default calendar when None).
+    #[serde(default)]
+    pub calendar_id: Option<String>,
+    #[serde(default)]
+    pub optional_attendees: Vec<Addr>,
+    /// free | tentative | busy | oof | workingElsewhere
+    #[serde(default)]
+    pub show_as: Option<String>,
+    /// Minutes before start; negative = no reminder; None = Outlook default.
+    #[serde(default)]
+    pub reminder_minutes: Option<i64>,
+    /// normal | private
+    #[serde(default)]
+    pub sensitivity: Option<String>,
+    /// Graph `patternedRecurrence` JSON built by the frontend.
+    #[serde(default)]
+    pub recurrence: Option<serde_json::Value>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+/// Partial update. Absent = leave alone; `null` clears where that makes sense (location, body, recurrence, reminder).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventPatch {
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    #[serde(default)]
+    pub is_all_day: Option<bool>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub location: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub body: Option<Option<String>>,
+    #[serde(default)]
+    pub attendees: Option<Vec<Addr>>,
+    #[serde(default)]
+    pub optional_attendees: Option<Vec<Addr>>,
+    #[serde(default)]
+    pub is_online: Option<bool>,
+    #[serde(default)]
+    pub show_as: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub reminder_minutes: Option<Option<i64>>,
+    #[serde(default)]
+    pub sensitivity: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub recurrence: Option<Option<serde_json::Value>>,
+    #[serde(default)]
+    pub categories: Option<Vec<String>>,
+}
+
+/// Distinguishes a missing key (None) from an explicit `null` (Some(None)).
+fn double_option<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize)]

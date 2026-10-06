@@ -160,7 +160,8 @@ fn meeting_type_guess(odata_type: Option<&str>) -> Option<String> {
 // ---------------- calendar ----------------
 
 const EVENT_SELECT: &str = "id,subject,start,end,isAllDay,isCancelled,location,organizer,attendees,responseStatus,showAs,\
-isOnlineMeeting,onlineMeeting,onlineMeetingUrl,webLink,bodyPreview,seriesMasterId,responseRequested";
+isOnlineMeeting,onlineMeeting,onlineMeetingUrl,webLink,bodyPreview,seriesMasterId,responseRequested,type,\
+reminderMinutesBeforeStart,isReminderOn,sensitivity,importance,categories";
 
 fn tz_prefer(tz: &str) -> String {
     format!("outlook.timezone=\"{tz}\"")
@@ -172,6 +173,10 @@ fn wall(v: &Value) -> String {
 }
 
 pub fn parse_event(account_id: &str, tz: &str, v: &Value) -> CalEvent {
+    parse_event_in(account_id, "", tz, v)
+}
+
+pub fn parse_event_in(account_id: &str, calendar_id: &str, tz: &str, v: &Value) -> CalEvent {
     let attendees = v["attendees"]
         .as_array()
         .map(|a| {
@@ -207,22 +212,85 @@ pub fn parse_event(account_id: &str, tz: &str, v: &Value) -> CalEvent {
         is_online: v["isOnlineMeeting"].as_bool().unwrap_or(false) || join_url.is_some(),
         join_url,
         web_link: v["webLink"].as_str().map(String::from),
-        preview: v["bodyPreview"].as_str().unwrap_or("").chars().take(400).collect(),
+        preview: v["bodyPreview"].as_str().unwrap_or("").chars().take(600).collect(),
         series_master_id: v["seriesMasterId"].as_str().map(String::from),
         response_requested: v["responseRequested"].as_bool().unwrap_or(true),
+        calendar_id: calendar_id.to_string(),
+        event_type: v["type"].as_str().unwrap_or("singleInstance").to_string(),
+        reminder_minutes: if v["isReminderOn"].as_bool().unwrap_or(false) { v["reminderMinutesBeforeStart"].as_i64() } else { None },
+        sensitivity: v["sensitivity"].as_str().unwrap_or("normal").to_string(),
+        importance: v["importance"].as_str().unwrap_or("normal").to_string(),
+        categories: v["categories"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect()).unwrap_or_default(),
     }
 }
 
+/// Outlook's named calendar colours (Graph `color` enum) as hex, for calendars without `hexColor`.
+fn calendar_color(v: &Value) -> Option<String> {
+    if let Some(h) = v["hexColor"].as_str().filter(|h| h.starts_with('#') && h.len() == 7) {
+        return Some(h.to_string());
+    }
+    let named = match v["color"].as_str()? {
+        "lightBlue" => "#4a9ae0",
+        "lightGreen" => "#50a86a",
+        "lightOrange" => "#e08a3a",
+        "lightGray" => "#8c8c8c",
+        "lightYellow" => "#d4b43a",
+        "lightTeal" => "#3aa6a0",
+        "lightPink" => "#d66ba0",
+        "lightBrown" => "#a07050",
+        "lightRed" => "#d85a5a",
+        "maxColor" => "#7a7aff",
+        _ => return None,
+    };
+    Some(named.into())
+}
+
+pub fn parse_calendar(account_id: &str, v: &Value) -> CalendarInfo {
+    CalendarInfo {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
+        account_id: account_id.to_string(),
+        name: v["name"].as_str().unwrap_or("Calendar").to_string(),
+        color: calendar_color(v),
+        is_default: v["isDefaultCalendar"].as_bool().unwrap_or(false),
+        can_edit: v["canEdit"].as_bool().unwrap_or(true),
+        owner: v.pointer("/owner/address").and_then(|a| a.as_str()).map(String::from),
+    }
+}
+
+/// All calendars of the mailbox (own + shared that are added to the mailbox).
+pub async fn calendars(st: &AppState, account_id: &str) -> Result<Vec<CalendarInfo>> {
+    let v = call(
+        st,
+        account_id,
+        Method::GET,
+        "/me/calendars?$select=id,name,color,hexColor,isDefaultCalendar,canEdit,owner&$top=50",
+        None,
+    )
+    .await?;
+    Ok(v["value"].as_array().into_iter().flatten().map(|c| parse_calendar(account_id, c)).collect())
+}
+
 /// Expanded occurrences in [from_utc, to_utc) ("YYYY-MM-DDTHH:MM:SSZ"), times rendered in `tz`.
-pub async fn calendar_view(st: &AppState, account_id: &str, tz: &str, from_utc: &str, to_utc: &str) -> Result<Vec<CalEvent>> {
-    let mut url = format!(
-        "/me/calendarView?startDateTime={from_utc}&endDateTime={to_utc}&$select={EVENT_SELECT}&$orderby=start/dateTime&$top=250"
-    );
+/// `calendar_id` = None reads the default calendar.
+pub async fn calendar_view(
+    st: &AppState,
+    account_id: &str,
+    calendar_id: Option<&str>,
+    tz: &str,
+    from_utc: &str,
+    to_utc: &str,
+) -> Result<Vec<CalEvent>> {
+    let base = match calendar_id {
+        Some(id) => format!("/me/calendars/{id}/calendarView"),
+        None => "/me/calendarView".to_string(),
+    };
+    let mut url = format!("{base}?startDateTime={from_utc}&endDateTime={to_utc}&$select={EVENT_SELECT}&$orderby=start/dateTime&$top=250");
+    let cal = calendar_id.unwrap_or("");
     let mut out = Vec::new();
     loop {
         let resp = send_raw(st, account_id, Method::GET, &url, None, Some(&tz_prefer(tz))).await?;
         let v: Value = resp.json().await?;
-        out.extend(v["value"].as_array().into_iter().flatten().map(|e| parse_event(account_id, tz, e)));
+        out.extend(v["value"].as_array().into_iter().flatten().map(|e| parse_event_in(account_id, cal, tz, e)));
         match v["@odata.nextLink"].as_str() {
             Some(next) => url = next.to_string(),
             None => break,
@@ -253,16 +321,42 @@ pub async fn respond_event(st: &AppState, account_id: &str, event_id: &str, acti
     Ok(())
 }
 
+fn attendee_json(a: &Addr, kind: &str) -> Value {
+    json!({
+        "emailAddress": { "address": a.email, "name": if a.name.is_empty() { &a.email } else { &a.name } },
+        "type": kind
+    })
+}
+
+fn attendees_json(required: &[Addr], optional: &[Addr]) -> Value {
+    Value::Array(
+        required.iter().map(|a| attendee_json(a, "required")).chain(optional.iter().map(|a| attendee_json(a, "optional"))).collect(),
+    )
+}
+
+/// Graph rejects a recurrence whose range lacks a startDate; fill it from the event start.
+fn normalize_recurrence(mut r: Value, start: &str, tz: &str) -> Value {
+    if r.is_object() {
+        if r["range"].is_null() {
+            r["range"] = json!({ "type": "noEnd" });
+        }
+        if r["range"]["startDate"].is_null() {
+            r["range"]["startDate"] = json!(start.chars().take(10).collect::<String>());
+        }
+        if r["range"]["recurrenceTimeZone"].is_null() {
+            r["range"]["recurrenceTimeZone"] = json!(tz);
+        }
+    }
+    r
+}
+
 pub async fn create_event(st: &AppState, tz: &str, d: &EventDraft) -> Result<CalEvent> {
     let mut body = json!({
         "subject": d.subject,
         "start": { "dateTime": d.start, "timeZone": tz },
         "end": { "dateTime": d.end, "timeZone": tz },
         "isAllDay": d.is_all_day,
-        "attendees": d.attendees.iter().map(|a| json!({
-            "emailAddress": { "address": a.email, "name": if a.name.is_empty() { &a.email } else { &a.name } },
-            "type": "required"
-        })).collect::<Vec<_>>(),
+        "attendees": attendees_json(&d.attendees, &d.optional_attendees),
     });
     if let Some(l) = d.location.as_deref().filter(|l| !l.trim().is_empty()) {
         body["location"] = json!({ "displayName": l });
@@ -274,9 +368,129 @@ pub async fn create_event(st: &AppState, tz: &str, d: &EventDraft) -> Result<Cal
         body["isOnlineMeeting"] = json!(true);
         body["onlineMeetingProvider"] = json!("teamsForBusiness");
     }
-    let resp = send_raw(st, &d.account_id, Method::POST, "/me/events", Some(&body), Some(&tz_prefer(tz))).await?;
+    if let Some(s) = d.show_as.as_deref() {
+        body["showAs"] = json!(s);
+    }
+    match d.reminder_minutes {
+        Some(m) if m >= 0 => {
+            body["isReminderOn"] = json!(true);
+            body["reminderMinutesBeforeStart"] = json!(m);
+        }
+        Some(_) => body["isReminderOn"] = json!(false),
+        None => {}
+    }
+    if let Some(s) = d.sensitivity.as_deref() {
+        body["sensitivity"] = json!(s);
+    }
+    if let Some(r) = d.recurrence.clone().filter(|r| r.is_object()) {
+        body["recurrence"] = normalize_recurrence(r, &d.start, tz);
+    }
+    if !d.categories.is_empty() {
+        body["categories"] = json!(d.categories);
+    }
+    let url = match d.calendar_id.as_deref().filter(|c| !c.is_empty()) {
+        Some(c) => format!("/me/calendars/{c}/events"),
+        None => "/me/events".to_string(),
+    };
+    let resp = send_raw(st, &d.account_id, Method::POST, &url, Some(&body), Some(&tz_prefer(tz))).await?;
     let v: Value = resp.json().await?;
-    Ok(parse_event(&d.account_id, tz, &v))
+    Ok(parse_event_in(&d.account_id, d.calendar_id.as_deref().unwrap_or(""), tz, &v))
+}
+
+/// PATCH /me/events/{id}. Pass an occurrence id to change one occurrence, the series master id for the whole series.
+pub async fn update_event(st: &AppState, account_id: &str, calendar_id: &str, tz: &str, event_id: &str, p: &EventPatch) -> Result<CalEvent> {
+    let mut body = json!({});
+    if let Some(s) = &p.subject {
+        body["subject"] = json!(s);
+    }
+    if let Some(s) = &p.start {
+        body["start"] = json!({ "dateTime": s, "timeZone": tz });
+    }
+    if let Some(e) = &p.end {
+        body["end"] = json!({ "dateTime": e, "timeZone": tz });
+    }
+    if let Some(a) = p.is_all_day {
+        body["isAllDay"] = json!(a);
+    }
+    if let Some(l) = &p.location {
+        body["location"] = match l.as_deref().filter(|l| !l.trim().is_empty()) {
+            Some(l) => json!({ "displayName": l }),
+            None => json!({ "displayName": "" }),
+        };
+    }
+    if let Some(b) = &p.body {
+        body["body"] = json!({ "contentType": "text", "content": b.clone().unwrap_or_default() });
+    }
+    if p.attendees.is_some() || p.optional_attendees.is_some() {
+        body["attendees"] = attendees_json(p.attendees.as_deref().unwrap_or(&[]), p.optional_attendees.as_deref().unwrap_or(&[]));
+    }
+    if let Some(o) = p.is_online {
+        body["isOnlineMeeting"] = json!(o);
+        if o {
+            body["onlineMeetingProvider"] = json!("teamsForBusiness");
+        }
+    }
+    if let Some(s) = &p.show_as {
+        body["showAs"] = json!(s);
+    }
+    if let Some(r) = &p.reminder_minutes {
+        match r {
+            Some(m) if *m >= 0 => {
+                body["isReminderOn"] = json!(true);
+                body["reminderMinutesBeforeStart"] = json!(m);
+            }
+            _ => body["isReminderOn"] = json!(false),
+        }
+    }
+    if let Some(s) = &p.sensitivity {
+        body["sensitivity"] = json!(s);
+    }
+    if let Some(r) = &p.recurrence {
+        body["recurrence"] = match r {
+            Some(r) if r.is_object() => normalize_recurrence(r.clone(), p.start.as_deref().unwrap_or("2000-01-01"), tz),
+            _ => Value::Null,
+        };
+    }
+    if let Some(c) = &p.categories {
+        body["categories"] = json!(c);
+    }
+    let resp = send_raw(st, account_id, Method::PATCH, &format!("/me/events/{event_id}"), Some(&body), Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    Ok(parse_event_in(account_id, calendar_id, tz, &v))
+}
+
+pub async fn delete_event(st: &AppState, account_id: &str, event_id: &str) -> Result<()> {
+    call(st, account_id, Method::DELETE, &format!("/me/events/{event_id}"), None).await?;
+    Ok(())
+}
+
+/// Organizer-side cancellation: notifies attendees and removes the event.
+pub async fn cancel_event(st: &AppState, account_id: &str, event_id: &str, comment: Option<&str>) -> Result<()> {
+    let mut body = json!({});
+    if let Some(c) = comment.filter(|c| !c.trim().is_empty()) {
+        body["comment"] = json!(c);
+    }
+    call(st, account_id, Method::POST, &format!("/me/events/{event_id}/cancel"), Some(&body)).await?;
+    Ok(())
+}
+
+/// One event with its full body (as text) and recurrence rule (resolved via the series master for occurrences).
+pub async fn event_full(st: &AppState, account_id: &str, calendar_id: &str, tz: &str, event_id: &str) -> Result<EventFull> {
+    let url = format!("/me/events/{event_id}?$select={EVENT_SELECT},body,recurrence");
+    let prefer = format!("{}, outlook.body-content-type=\"html\"", tz_prefer(tz));
+    let resp = send_raw(st, account_id, Method::GET, &url, None, Some(&prefer)).await?;
+    let v: Value = resp.json().await?;
+    let event = parse_event_in(account_id, calendar_id, tz, &v);
+    let html = v.pointer("/body/content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+    let mut recurrence = v.get("recurrence").filter(|r| r.is_object()).cloned();
+    if recurrence.is_none() {
+        if let Some(master) = event.series_master_id.as_deref() {
+            if let Ok(m) = call(st, account_id, Method::GET, &format!("/me/events/{master}?$select=id,recurrence"), None).await {
+                recurrence = m.get("recurrence").filter(|r| r.is_object()).cloned();
+            }
+        }
+    }
+    Ok(EventFull { body_text: html_to_text(&html), body_html: html, event, recurrence })
 }
 
 /// Free/busy for `emails` as availabilityView strings (one digit per `interval` minutes from `from`).

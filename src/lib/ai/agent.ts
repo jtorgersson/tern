@@ -244,7 +244,7 @@ export class AgentSession {
 function describeView(v: MessageView): string {
   switch (v.kind) {
     case "today": return "Today (briefing / proactive overview)";
-    case "agenda": return "Calendar agenda (next 7 days)";
+    case "calendar": return "Calendar (day/week/month/agenda view)";
     case "folder": return `folder ${v.folderId}`;
     case "unified": return `${v.wellKnown} (all accounts)`;
     case "flagged": return "flagged";
