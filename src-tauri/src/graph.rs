@@ -45,8 +45,11 @@ async fn send_raw(
             prefer.push_str(p);
         }
         let mut req = st.http.request(method.clone(), &full).bearer_auth(&token).header("Prefer", prefer);
-        if let Some(b) = body {
-            req = req.json(b);
+        match body {
+            Some(b) => req = req.json(b),
+            // Graph answers 411 to a body-less POST/PATCH (e.g. `/send`) unless Content-Length: 0 is sent.
+            None if matches!(method, Method::POST | Method::PATCH | Method::PUT) => req = req.body(""),
+            None => {}
         }
         let resp = req.send().await?;
         let status = resp.status();
