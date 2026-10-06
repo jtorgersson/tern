@@ -6,7 +6,7 @@
   import { isoWeek } from "$lib/util/fmt";
   import EventRow from "./EventRow.svelte";
   import Logo from "./Logo.svelte";
-  import { Plus } from "@lucide/svelte";
+  import { Plus, Shield } from "@lucide/svelte";
 
   const days = $derived(calendar.byDay());
   const total = $derived(days.reduce((n, d) => n + d.events.length, 0));
@@ -78,13 +78,13 @@
                 {#each timed as e (e.id)}
                   {#if gaps.has(e.id)}
                     {@const g = gaps.get(e.id)!}
-                    <div class="gap"><span class="gline"></span><span class="glbl mono">{hm(g.start)}–{hm(g.end)} · {gapLabel(g.mins)}</span><span class="gline"></span></div>
+                    <div class="gap"><span class="gline"></span><button class="glbl mono" onclick={() => calendar.createFocusBlock(g.start, g.end)} title="Block this as private focus time"><span>{hm(g.start)}–{hm(g.end)} · {gapLabel(g.mins)}</span><span class="block"><Shield size={10} /> block</span></button><span class="gline"></span></div>
                   {/if}
                   <EventRow ev={e} highlight={isToday && e.id === nextId} overlap={overlapIds.has(e.id)} {showAccount} dense />
                 {/each}
                 {#if gaps.has("end") && timed.length}
                   {@const g = gaps.get("end")!}
-                  <div class="gap"><span class="gline"></span><span class="glbl mono">{hm(g.start)}–{hm(g.end)} · {gapLabel(g.mins)}</span><span class="gline"></span></div>
+                  <div class="gap"><span class="gline"></span><button class="glbl mono" onclick={() => calendar.createFocusBlock(g.start, g.end)} title="Block this as private focus time"><span>{hm(g.start)}–{hm(g.end)} · {gapLabel(g.mins)}</span><span class="block"><Shield size={10} /> block</span></button><span class="gline"></span></div>
                 {/if}
               </div>
             </div>
@@ -220,9 +220,28 @@
     background: repeating-linear-gradient(90deg, var(--line-strong) 0 4px, transparent 4px 8px);
   }
   .glbl {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-size: 10px;
     color: var(--green);
     white-space: nowrap;
+    padding: 1px 8px;
+    border-radius: 999px;
+    transition: background var(--t);
+  }
+  .glbl:hover {
+    background: color-mix(in oklab, var(--green) 14%, transparent);
+  }
+  .block {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    opacity: 0;
+    transition: opacity var(--t);
+  }
+  .glbl:hover .block {
+    opacity: 1;
   }
   .empty {
     display: flex;

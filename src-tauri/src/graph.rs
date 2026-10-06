@@ -309,13 +309,33 @@ pub async fn event_message(st: &AppState, account_id: &str, tz: &str, message_id
     Ok((kind, event))
 }
 
-pub async fn respond_event(st: &AppState, account_id: &str, event_id: &str, action: &str, comment: Option<&str>, send: bool) -> Result<()> {
+pub async fn respond_event(
+    st: &AppState,
+    account_id: &str,
+    event_id: &str,
+    action: &str,
+    comment: Option<&str>,
+    send: bool,
+    proposed: Option<(&str, &str)>,
+    tz: &str,
+) -> Result<()> {
     if !matches!(action, "accept" | "tentativelyAccept" | "decline") {
         bail!("unknown response {action}");
     }
     let mut body = json!({ "sendResponse": send });
     if let Some(c) = comment.filter(|c| !c.trim().is_empty()) {
         body["comment"] = json!(c);
+    }
+    // Graph only accepts a counter-proposal with tentativelyAccept / decline, and it must be sent to the organizer.
+    if let Some((s, e)) = proposed {
+        if action == "accept" {
+            bail!("a new time can only be proposed with a tentative or declined response");
+        }
+        body["sendResponse"] = json!(true);
+        body["proposedNewTime"] = json!({
+            "start": { "dateTime": s, "timeZone": tz },
+            "end": { "dateTime": e, "timeZone": tz }
+        });
     }
     call(st, account_id, Method::POST, &format!("/me/events/{event_id}/{action}"), Some(&body)).await?;
     Ok(())

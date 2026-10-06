@@ -72,6 +72,15 @@ Skip empty sections. Never invent facts; if a preview is ambiguous, say what it 
 
 ${UNTRUSTED}`;
 
+export const PREP_SYSTEM = `You prepare the user for an upcoming meeting, using the event details and related emails provided. Write in Markdown, in the user's language (match <about_user> or the emails; default English), under ~120 words:
+- One bold line: what this meeting is really about and what the user's role in it is.
+- "**Know**": 2–4 bullets with the facts, decisions and numbers from the emails that matter for this meeting, attributed to people by first name.
+- "**Prepare**": 1–3 bullets of concrete things to do or bring, if any.
+- "**Open**": unanswered questions or things the user owes someone, if any.
+Skip sections with nothing to say. Never invent; if the emails do not cover the meeting, say in one line that nothing related was found and what the invite itself says. Use the 24-hour clock.
+
+${UNTRUSTED}`;
+
 export function aboutMeBlock(aboutMe: string): string {
   const t = aboutMe.trim();
   return t ? `<about_user>\n${t}\n</about_user>\n\n` : "";

@@ -39,7 +39,8 @@ Public-client app registration (no secret). Auth-code + PKCE against
 `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`, redirect `http://localhost:<random port>`.
 Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`.
 Sync: `/me/mailFolders` + per-folder `messages/delta` (inbox, sent, drafts, archive, deleted, junk), polling every
-`syncIntervalSecs`. Bodies fetched lazily on open (and for AI on demand).
+`syncIntervalSecs`. Bodies fetched lazily on open, and prefetched in the background after each sync (`sync::prefetch_bodies`, 40 per cycle,
+last 60 days, `settings.prefetchBodies`).
 Calendar (`calendar.rs`): each sync cycle lists `/me/calendars` and replaces a cached window (−14d…+45d) of
 `/me/calendars/{id}/calendarView` for every calendar of the account, with `Prefer: outlook.timezone="<system IANA zone>"`
 so stored times are local wall-clock strings. Other ranges are fetched on demand (`calendar_fetch_range`, ≤400 days) when

@@ -7,7 +7,7 @@ import { DEFAULT_ANTHROPIC_MODEL } from "./config";
 export { configureAi, hasAi, DEFAULT_ANTHROPIC_MODEL } from "./config";
 export { AgentSession, type AgentEvent, type AgentContext } from "./agent";
 export { triage, triageInbox } from "./triage";
-export { summarizeThread, draftReply, rewrite, briefing, predraftReply, PREDRAFT_INSTRUCTION, type BriefingInput } from "./writing";
+export { summarizeThread, draftReply, rewrite, briefing, predraftReply, prepMeeting, PREDRAFT_INSTRUCTION, type BriefingInput } from "./writing";
 export { AiError, friendlyError, isAbort } from "./errors";
 export { resetBackends } from "./providers";
 export { textToHtml } from "./tools";

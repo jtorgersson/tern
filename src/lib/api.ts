@@ -87,8 +87,11 @@ export const api = {
   calendarSync: () => invoke<void>("calendar_sync"),
   /** Invitation details for a meeting-request message; null if it isn't one. Fetches from Graph. */
   inviteGet: (messageId: string) => invoke<InviteInfo | null>("invite_get", { messageId }),
-  inviteRespond: (accountId: string, eventId: string, action: InviteAction, comment: string | null, sendResponse = true) =>
-    invoke<void>("invite_respond", { accountId, eventId, action, comment, sendResponse }),
+  /** `proposed` (tentative/decline only) sends a counter-proposal to the organizer. */
+  inviteRespond: (accountId: string, eventId: string, action: InviteAction, comment: string | null, sendResponse = true, proposed: { start: string; end: string } | null = null) =>
+    invoke<void>("invite_respond", { accountId, eventId, action, comment, sendResponse, proposedStart: proposed?.start ?? null, proposedEnd: proposed?.end ?? null }),
+  /** Free-text search over every cached event (subject, place, people, notes), closest to now first. */
+  calendarSearch: (query: string, limit = 40) => invoke<CalEvent[]>("calendar_search", { query, limit }),
   eventCreate: (draft: EventDraft) => invoke<CalEvent>("event_create", { draft }),
   freeSlots: (query: FreeSlotQuery) => invoke<FreeSlot[]>("calendar_free_slots", { query }),
   /** The user's calendars (all accounts unless filtered), default calendar first. */

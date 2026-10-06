@@ -349,6 +349,8 @@ export interface Settings {
   };
   signatures: Record<string, string>; // accountId -> html
   syncIntervalSecs: number;
+  /** Download bodies of recent mail in the background after each sync (instant opening, body search). */
+  prefetchBodies: boolean;
   calendar: {
     /** Desktop notification this many minutes before a meeting (0 = off). */
     reminderMinutes: number;

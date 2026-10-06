@@ -3,6 +3,7 @@
   import { composer } from "$lib/state/composer.svelte";
   import { Search, PenLine, Sparkles, Settings, RefreshCw, X } from "@lucide/svelte";
   import Logo from "./Logo.svelte";
+  import NextUp from "./NextUp.svelte";
 
   let q = $state("");
   let input: HTMLInputElement | undefined = $state();
@@ -56,6 +57,7 @@
   </form>
 
   <div class="right" data-tauri-drag-region>
+    <NextUp />
     {#if app.triaging}
       <span class="status shimmer-text" title="AI is sorting new mail">Triaging…</span>
     {/if}

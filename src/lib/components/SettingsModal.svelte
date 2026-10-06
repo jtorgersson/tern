@@ -366,6 +366,10 @@
               {/each}
             </div>
           </div>
+          <label class="toggle">
+            <input type="checkbox" checked={s.prefetchBodies !== false} onchange={(e) => app.patchSettings((st) => (st.prefetchBodies = (e.currentTarget as HTMLInputElement).checked))} />
+            <span><b>Download message bodies in the background</b> — mail opens instantly, search covers full text, and Tern's meeting prep sees the whole conversation. <span class="hint">Recent mail (60 days), a batch per sync.</span></span>
+          </label>
           <button class="btn" onclick={() => app.syncNow()}><RefreshCw size={14} /> Sync now</button>
           {#if app.accounts.length}
             <div class="list status">

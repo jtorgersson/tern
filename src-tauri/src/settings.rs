@@ -30,6 +30,7 @@ pub fn defaults() -> Value {
         },
         "signatures": {},
         "syncIntervalSecs": 60,
+        "prefetchBodies": true,
         "calendar": {
             "reminderMinutes": 5,
             "workStart": "09:00",
@@ -99,6 +100,10 @@ pub fn reminder_minutes(s: &Value) -> i64 {
 pub fn work_hours(s: &Value) -> (String, String) {
     let g = |k: &str, d: &str| s.pointer(&format!("/calendar/{k}")).and_then(|v| v.as_str()).unwrap_or(d).to_string();
     (g("workStart", "09:00"), g("workEnd", "17:00"))
+}
+
+pub fn prefetch_bodies(s: &Value) -> bool {
+    s.get("prefetchBodies").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
 pub fn sync_interval(s: &Value) -> u64 {

@@ -7,7 +7,9 @@
   import type { EditScope, InviteAction } from "$lib/types";
   import { whenLabel, untilLabel, isPast, initialsOf, RESPONSE_LABEL, recurrenceLabel, SHOW_AS_LABEL, hm } from "$lib/util/cal";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { X, Video, MapPin, ExternalLink, Check, CircleHelp, Ban, Crown, CircleAlert, Sparkles, AlertTriangle, Pencil, Trash2, Copy, Repeat, Bell, Lock, Mail, Link as LinkIcon, Users } from "@lucide/svelte";
+  import { X, Video, MapPin, ExternalLink, Check, CircleHelp, Ban, Crown, CircleAlert, Sparkles, AlertTriangle, Pencil, Trash2, Copy, Repeat, Bell, Lock, LockOpen, Mail, Link as LinkIcon, CalendarClock } from "@lucide/svelte";
+  import MeetingPrep from "./MeetingPrep.svelte";
+  import ProposeTime from "./ProposeTime.svelte";
 
   const ev = $derived(calendar.details);
   const full = $derived(calendar.detailsFull?.event.id === ev?.id ? calendar.detailsFull : null);
@@ -24,6 +26,8 @@
   let sendResponse = $state(true);
   let confirmDelete = $state<null | { scope: EditScope }>(null);
   let cancelNote = $state("");
+  let proposing = $state(false);
+  const isPrivate = $derived(ev?.sensitivity === "private");
 
   $effect(() => {
     void ev?.id;
@@ -32,6 +36,7 @@
     sendResponse = true;
     confirmDelete = null;
     cancelNote = "";
+    proposing = false;
   });
   let seenDeleteRequest = 0;
   $effect(() => {
@@ -100,6 +105,9 @@
         </div>
         <div class="hdr-actions">
           {#if canEdit}
+            <button class="icon-btn s" class:on={isPrivate} onclick={() => calendar.togglePrivate(ev)} title={isPrivate ? "Private — click to make visible to people who can see your calendar" : "Make private (hidden from people who can see your calendar)"}>
+              {#if isPrivate}<Lock size={14} />{:else}<LockOpen size={14} />{/if}
+            </button>
             <button class="icon-btn s" onclick={() => calendar.openEditor(ev, "occurrence")} title="Edit (e)"><Pencil size={14} /></button>
             <button class="icon-btn s" onclick={() => calendar.duplicate(ev)} title="Duplicate"><Copy size={14} /></button>
             <button class="icon-btn s danger" onclick={() => (confirmDelete = confirmDelete ? null : { scope: "occurrence" })} title="Delete (#)"><Trash2 size={14} /></button>
@@ -209,6 +217,14 @@
         <p class="preview" class:full={!!full}>{description}</p>
       {/if}
 
+      {#if !ev.isCancelled && !past && (ev.attendees.length || ev.organizer)}
+        <MeetingPrep {ev} />
+      {/if}
+
+      {#if proposing}
+        <ProposeTime {ev} onclose={() => (proposing = false)} />
+      {/if}
+
       {#if canRespond}
         <div class="respond">
           <div class="rbtns">
@@ -217,6 +233,7 @@
             <button class="btn" class:on={ev.response === "declined"} disabled={!!busy} onclick={() => respond("decline")}><Ban size={13} /> Decline</button>
             <span class="spacer"></span>
             {#if !showNote}<button class="lnk small" onclick={() => (showNote = true)}>Add a note</button>{/if}
+            <button class="lnk small" onclick={() => (proposing = !proposing)}><CalendarClock size={12} /> New time</button>
           </div>
           {#if showNote}
             <input class="field" bind:value={note} placeholder="Note to the organizer (optional)" />

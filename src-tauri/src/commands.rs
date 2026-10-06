@@ -432,6 +432,11 @@ pub fn calendar_sync(st: St) {
 }
 
 #[tauri::command]
+pub fn calendar_search(st: St, query: String, limit: Option<i64>) -> R<Vec<CalEvent>> {
+    st.db.search_events(&query, limit.unwrap_or(40).clamp(1, 200)).map_err(err)
+}
+
+#[tauri::command]
 pub fn calendar_list(st: St, account_id: Option<String>) -> R<Vec<CalendarInfo>> {
     st.db.calendars(account_id.as_deref()).map_err(err)
 }
@@ -541,8 +546,15 @@ pub async fn invite_respond(
     action: String,
     comment: Option<String>,
     send_response: Option<bool>,
+    proposed_start: Option<String>,
+    proposed_end: Option<String>,
 ) -> R<()> {
-    graph::respond_event(&st, &account_id, &event_id, &action, comment.as_deref(), send_response.unwrap_or(true))
+    let proposed = match (&proposed_start, &proposed_end) {
+        (Some(s), Some(e)) if e > s => Some((s.as_str(), e.as_str())),
+        (Some(_), Some(_)) => return Err("The proposed end must be after its start".into()),
+        _ => None,
+    };
+    graph::respond_event(&st, &account_id, &event_id, &action, comment.as_deref(), send_response.unwrap_or(true), proposed, &calendar::local_tz())
         .await
         .map_err(|e| format!("{e:#}"))?;
     // Reflect it locally right away; the next calendar sync confirms.

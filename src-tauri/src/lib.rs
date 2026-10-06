@@ -81,6 +81,7 @@ pub fn run() {
             commands::event_create,
             commands::calendar_free_slots,
             commands::calendar_list,
+            commands::calendar_search,
             commands::calendar_fetch_range,
             commands::event_get,
             commands::event_update,

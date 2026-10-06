@@ -11,7 +11,8 @@
   import TimeGrid from "./TimeGrid.svelte";
   import MonthGrid from "./MonthGrid.svelte";
   import AgendaList from "./AgendaList.svelte";
-  import { ChevronLeft, ChevronRight, Plus, RefreshCw, LoaderCircle, Sparkles, Zap, CalendarCheck, Check, Eye, EyeOff, PanelLeftClose, PanelLeftOpen } from "@lucide/svelte";
+  import { ChevronLeft, ChevronRight, Plus, RefreshCw, LoaderCircle, Sparkles, Zap, CalendarCheck, Check, Eye, EyeOff, PanelLeftClose, PanelLeftOpen, Search, X, Share2, Shield } from "@lucide/svelte";
+  import { hm } from "$lib/util/cal";
   import { tick } from "svelte";
 
   const VIEWS: { id: CalView; label: string; key: string }[] = [
@@ -94,6 +95,57 @@
   export function focusQuick() {
     tick().then(() => quickEl?.focus());
   }
+
+  // ---- event search (rail) ----
+  let searchEl: HTMLInputElement | undefined = $state();
+  let searchText = $state("");
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    if (calendar.searchFocusTick) tick().then(() => searchEl?.focus());
+  });
+  function onSearchInput() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => calendar.search(searchText), 160);
+  }
+  function clearSearch() {
+    searchText = "";
+    calendar.search("");
+    searchEl?.blur();
+  }
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      clearSearch();
+      e.stopPropagation();
+    } else if (e.key === "Enter" && calendar.searchResults[0]) {
+      calendar.jumpTo(calendar.searchResults[0]);
+      e.stopPropagation();
+    } else e.stopPropagation();
+  }
+  const searchOpen = $derived(!!calendar.searchQuery.trim());
+
+  /** Next free hour (≥ 60 min inside working hours) from now, for the one-click focus block. */
+  const nextFocus = $derived.by(() => {
+    const s = app.settings?.calendar;
+    if (!s) return null;
+    const now = calendar.now;
+    const [weH, weM] = s.workEnd.split(":").map(Number);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), weH || 17, weM || 0);
+    if (now.getDay() === 0 || now.getDay() === 6 || now >= end) return null;
+    const start = new Date(now);
+    start.setSeconds(0, 0);
+    start.setMinutes(start.getMinutes() <= 30 ? 30 : 60);
+    const busy = calendar.todayMeetings;
+    let t = start.getTime();
+    while (t + 60 * 60_000 <= end.getTime()) {
+      const sIso = isoOf(new Date(t));
+      const eIso = isoOf(new Date(t + 60 * 60_000));
+      const clash = busy.find((b) => b.start < eIso && b.end > sIso);
+      if (!clash) return { start: sIso, end: eIso };
+      t = new Date(clash.end).getTime();
+      t = Math.ceil(t / (15 * 60_000)) * 15 * 60_000;
+    }
+    return null;
+  });
 </script>
 
 <section class="cal" class:rail-closed={!railOpen}>
@@ -140,7 +192,36 @@
   <div class="body">
     {#if railOpen}
       <aside class="rail">
+        <div class="esearch" class:has={searchOpen}>
+          <Search size={13} />
+          <input bind:this={searchEl} bind:value={searchText} placeholder="Search events…" oninput={onSearchInput} onkeydown={onSearchKey} />
+          {#if searchOpen}<button class="x" onclick={clearSearch} aria-label="Clear"><X size={12} /></button>{:else}<kbd>/</kbd>{/if}
+        </div>
+
+        {#if searchOpen}
+          <div class="rail-sec results">
+            <div class="eyebrow">{calendar.searching ? "Searching…" : `${calendar.searchResults.length} event${calendar.searchResults.length === 1 ? "" : "s"}`}</div>
+            {#each calendar.searchResults as e (e.id)}
+              <button class="hit" class:past={e.end < isoOf(calendar.now)} onclick={() => calendar.jumpTo(e)}>
+                <span class="hsw" style:background={calendar.colorOf(e)}></span>
+                <span class="ht">{e.subject || "(no title)"}</span>
+                <span class="hw mono">{whenLabel(e)}</span>
+              </button>
+            {/each}
+            {#if !calendar.searching && !calendar.searchResults.length}
+              <div class="nores">Nothing in the cache matches. Months you haven't opened aren't downloaded yet.</div>
+            {/if}
+          </div>
+        {:else}
         <MiniMonth />
+
+        <div class="rail-sec">
+          <div class="eyebrow">Scheduling</div>
+          <button class="ai" onclick={() => calendar.shareAvailability()} title="Compose an email listing your free times this week"><Share2 size={12} /> Share my availability</button>
+          {#if nextFocus}
+            <button class="ai" onclick={() => calendar.createFocusBlock(nextFocus!.start, nextFocus!.end)} title="Block the next free hour as private focus time"><Shield size={12} /> Focus hour {hm(nextFocus.start)}–{hm(nextFocus.end)}</button>
+          {/if}
+        </div>
 
         {#if calendar.calendars.length}
           <div class="rail-sec">
@@ -183,6 +264,7 @@
             <button class="ai" onclick={() => ask("What's my next meeting about? Check related mail.")}><Sparkles size={12} /> Prep my next meeting</button>
             <button class="ai" onclick={() => ask("Look at my week and suggest where I can protect 2 hours of focus time. Don't create anything yet.")}><Sparkles size={12} /> Protect focus time</button>
           </div>
+        {/if}
         {/if}
       </aside>
     {/if}
@@ -335,6 +417,73 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  .esearch {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 8px 0 10px;
+    border-radius: 8px;
+    color: var(--muted);
+    background: color-mix(in oklab, var(--bg-darker) 40%, transparent);
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition: box-shadow var(--t);
+  }
+  .esearch:focus-within {
+    box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft);
+    color: var(--accent);
+  }
+  .esearch input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    font-size: 12.5px;
+    color: var(--fg);
+  }
+  .esearch input::placeholder {
+    color: var(--muted);
+  }
+  .esearch .x {
+    display: grid;
+    color: var(--muted);
+  }
+  .hit {
+    display: grid;
+    grid-template-columns: 3px 1fr;
+    gap: 1px 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    text-align: left;
+    transition: background var(--t);
+  }
+  .hit:hover {
+    background: var(--hover);
+  }
+  .hit.past {
+    opacity: 0.6;
+  }
+  .hsw {
+    grid-row: 1 / 3;
+    border-radius: 2px;
+  }
+  .ht {
+    font-size: 12.5px;
+    font-weight: 550;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hw {
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .nores {
+    font-size: 11.5px;
+    color: var(--muted);
+    padding: 4px 8px;
+    line-height: 1.4;
   }
   .rail-sec .eyebrow {
     padding: 0 6px 6px;

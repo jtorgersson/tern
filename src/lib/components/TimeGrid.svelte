@@ -154,6 +154,15 @@
     return null;
   });
   const lbl = (m: number) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+  const cursor = $derived(calendar.cursor);
+  // Keep the keyboard cursor in view.
+  $effect(() => {
+    if (!cursor || !scroller) return;
+    const top = (cursor.mins / 60) * HOUR;
+    const bottom = ((cursor.mins + cursor.len) / 60) * HOUR;
+    if (top < scroller.scrollTop + 20) scroller.scrollTop = Math.max(0, top - 60);
+    else if (bottom > scroller.scrollTop + scroller.clientHeight - 20) scroller.scrollTop = bottom - scroller.clientHeight + 60;
+  });
 
   function style(ev: CalEvent): string {
     return `--c: ${calendar.colorOf(ev)}`;
@@ -261,6 +270,12 @@
               <div class="ghost" style:top="{(ghost.top / 60) * HOUR}px" style:height="{(ghost.height / 60) * HOUR - 2}px">
                 <span class="mono">{ghost.label}</span>
               </div>
+            {/if}
+            {#if cursor && cursor.col === ci}
+              <button class="cursor" style:top="{(cursor.mins / 60) * HOUR}px" style:height="{(cursor.len / 60) * HOUR - 2}px" onclick={() => calendar.composeAtCursor()} title="Enter: new event here">
+                <span class="mono">{lbl(cursor.mins)}–{lbl(cursor.mins + cursor.len)}</span>
+                <span class="hintk"><kbd>↵</kbd> new</span>
+              </button>
             {/if}
             {#if c.key === todayKey}
               <div class="now" style:top="{(nowMins / 60) * HOUR}px"><span class="dot"></span></div>
@@ -573,6 +588,30 @@
     color: var(--accent);
     pointer-events: none;
     z-index: 4;
+  }
+  .cursor {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    border-radius: 7px;
+    background: color-mix(in oklab, var(--accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 4px color-mix(in oklab, var(--accent) 12%, transparent);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 7px;
+    font-size: 10.5px;
+    color: var(--accent);
+    z-index: 4;
+    animation: fade-up 120ms var(--ease);
+  }
+  .hintk {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--fg-dim);
   }
   .now {
     position: absolute;

@@ -903,6 +903,24 @@ impl Db {
         Ok(rows)
     }
 
+    /// Case-insensitive search over subject, location, attendees, organizer and preview of every cached event.
+    pub fn search_events(&self, query: &str, limit: i64) -> Result<Vec<CalEvent>> {
+        let words: Vec<String> = query.split_whitespace().map(|w| format!("%{}%", w.to_lowercase().replace('%', ""))).collect();
+        if words.is_empty() {
+            return Ok(vec![]);
+        }
+        let c = self.conn();
+        let hay = "lower(subject || ' ' || coalesce(location,'') || ' ' || attendees_json || ' ' || coalesce(organizer_json,'') || ' ' || preview)";
+        let conds: Vec<String> = (1..=words.len()).map(|i| format!("{hay} LIKE ?{i}")).collect();
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events WHERE {} ORDER BY abs(julianday(start_local) - julianday('now','localtime')) LIMIT {limit}",
+            conds.join(" AND ")
+        );
+        let mut st = c.prepare(&sql)?;
+        let rows = st.query_map(params_from_iter(words.iter()), row_event)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// Events on the same account that collide with `ev` and actually block time.
     pub fn conflicts(&self, ev: &CalEvent) -> Result<Vec<CalEvent>> {
         let all = self.events(&ev.start, &ev.end, Some(&ev.account_id))?;
@@ -914,6 +932,22 @@ impl Db {
     }
 
     // ---------- bodies ----------
+    /// Recent messages (any folder, inbox first, newest first) whose body is not cached yet.
+    pub fn ids_without_body(&self, account_id: &str, limit: i64) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT m.id FROM messages m
+             JOIN folders f ON f.id = m.folder_id
+             LEFT JOIN bodies b ON b.message_id = m.id
+             WHERE m.account_id = ?1 AND b.message_id IS NULL AND m.is_draft = 0
+               AND m.received_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-60 days')
+               AND f.well_known IS NOT 'junkemail' AND f.well_known IS NOT 'deleteditems'
+             ORDER BY (f.well_known = 'inbox') DESC, m.received_at DESC LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![account_id, limit], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn body(&self, id: &str) -> Result<Option<StoredBody>> {
         let c = self.conn();
         Ok(c.query_row(

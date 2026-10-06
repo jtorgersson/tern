@@ -52,6 +52,7 @@ pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account, include
             }
             let _ = st.db.set_account_status(&acc.id, "ok", None, true);
             emit_status(app, st, &acc.id, "idle", None);
+            prefetch_bodies(st, acc).await;
         }
         Err(e) => {
             let reauth = e.downcast_ref::<AuthError>().is_some();
@@ -63,6 +64,42 @@ pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account, include
                 let _ = app.emit("accounts://changed", ());
             }
         }
+    }
+}
+
+/// Downloads bodies of recent messages in the background so opening mail is instant and body search works
+/// without a round trip. A bounded batch per cycle keeps Graph throttling and bandwidth in check.
+const PREFETCH_PER_CYCLE: i64 = 40;
+
+async fn prefetch_bodies(st: &AppState, acc: &Account) {
+    if !crate::settings::prefetch_bodies(&st.settings.read().unwrap()) {
+        return;
+    }
+    let ids = match st.db.ids_without_body(&acc.id, PREFETCH_PER_CYCLE) {
+        Ok(ids) => ids,
+        Err(_) => return,
+    };
+    for id in ids {
+        // The user may have opened it meanwhile.
+        if st.db.body(&id).ok().flatten().is_some() {
+            continue;
+        }
+        match graph::body(st, &acc.id, &id).await {
+            Ok(b) => {
+                let _ = st.db.set_body(&id, &b);
+            }
+            Err(e) => {
+                // Deleted since the sync, or throttled: stop this batch, the next cycle retries.
+                if let Some(g) = e.downcast_ref::<GraphError>() {
+                    if g.status == 404 {
+                        continue;
+                    }
+                }
+                log::debug!("body prefetch stopped for {}: {e:#}", acc.email);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(120)).await;
     }
 }
 

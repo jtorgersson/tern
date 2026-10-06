@@ -68,6 +68,12 @@ describe("parseQuickAdd", () => {
     expect(c.repeat).toBe("weekly");
     expect(iso(c.start)).toBe("2026-10-12T09:00");
   });
+  test("private keyword", () => {
+    const q = parseQuickAdd("Läkare privat 14/10 10:00", NOW)!;
+    expect(q.isPrivate).toBe(true);
+    expect(q.subject).toBe("Läkare");
+    expect(parseQuickAdd("Lunch", NOW)!.isPrivate).toBe(false);
+  });
   test("empty input", () => {
     expect(parseQuickAdd("   ", NOW)).toBeNull();
   });

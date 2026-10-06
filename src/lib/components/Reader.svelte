@@ -13,6 +13,7 @@
   import TldrCard from "./TldrCard.svelte";
   import QuickReply from "./QuickReply.svelte";
   import InviteCard from "./InviteCard.svelte";
+  import DateChips from "./DateChips.svelte";
   import Logo from "./Logo.svelte";
   import {
     Archive,
@@ -134,6 +135,9 @@
                 <div class="content">
                   <MailFrame html={t.bodyHtml} />
                 </div>
+                {#if !t.meetingType || t.meetingType === "none"}
+                  <DateChips message={t} />
+                {/if}
 
                 {#if t.attachments.some((a) => !a.isInline)}
                   <div class="atts">

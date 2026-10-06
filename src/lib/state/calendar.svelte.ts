@@ -27,6 +27,17 @@ import { hueColor } from "$lib/theme";
 import { errMsg } from "$lib/util/misc";
 import { app } from "./app.svelte";
 import { toasts } from "./toasts.svelte";
+import { hhmm, weekdayDayMonth } from "$lib/util/fmt";
+
+/** Keyboard time cursor on the day/week grid. */
+export interface Cursor {
+  /** Index into `days`. */
+  col: number;
+  /** Minutes from midnight (snapped to 30). */
+  mins: number;
+  /** Length in minutes. */
+  len: number;
+}
 
 /** Must match src-tauri/src/calendar.rs. Inside this window the periodic sync keeps the cache fresh. */
 const WINDOW_BACK_DAYS = 14;
@@ -69,6 +80,13 @@ class CalendarState {
   composerScope = $state<EditScope>("occurrence");
   /** Bumped by the `#` shortcut: the details popover opens with its delete confirmation showing. */
   deleteRequest = $state(0);
+  /** Event search (rail). */
+  searchQuery = $state("");
+  searchResults = $state<CalEvent[]>([]);
+  searching = $state(false);
+  searchFocusTick = $state(0);
+  /** Keyboard time cursor (day/week views). */
+  cursor = $state<Cursor | null>(null);
 
   /** Invitation details cached per message id. */
   invites = $state<Record<string, InviteInfo | null>>({});
@@ -230,6 +248,7 @@ class CalendarState {
   setView(v: CalView) {
     if (!VIEWS.includes(v)) return;
     this.view = v;
+    this.cursor = null;
     this.viewInitialised = true;
     try {
       localStorage.setItem(VIEW_KEY, v);
@@ -420,15 +439,16 @@ class CalendarState {
     );
   }
 
-  /** Respond to an invitation; optimistic in both the events list and any cached invite. */
-  async respond(ev: CalEvent, action: InviteAction, comment: string | null = null, sendResponse = true) {
+  /** Respond to an invitation; optimistic in both the events list and any cached invite. `proposed` = counter-proposal. */
+  async respond(ev: CalEvent, action: InviteAction, comment: string | null = null, sendResponse = true, proposed: { start: string; end: string } | null = null) {
     const response = this.responseFor(action);
     const prev = ev.response;
     this.patchEverywhere(ev.id, (e) => ({ ...e, response }));
     try {
-      await api.inviteRespond(ev.accountId, ev.id, action, comment, sendResponse);
+      await api.inviteRespond(ev.accountId, ev.id, action, comment, sendResponse, proposed);
       const verb = action === "accept" ? "Accepted" : action === "decline" ? "Declined" : "Tentatively accepted";
-      toasts.show(`${verb} “${ev.subject || "(no title)"}”${sendResponse ? "" : " (no response sent)"}`, { kind: "success" });
+      const extra = proposed ? ` · proposed ${weekdayDayMonth(proposed.start)} ${hhmm(proposed.start)}` : sendResponse ? "" : " (no response sent)";
+      toasts.show(`${verb} “${ev.subject || "(no title)"}”${extra}`, { kind: "success" });
       this.load({ silent: true });
     } catch (e) {
       this.patchEverywhere(ev.id, (x) => ({ ...x, response: prev }));
@@ -476,6 +496,146 @@ class CalendarState {
       toasts.error(`Could not update: ${errMsg(e)}`);
       throw e;
     }
+  }
+
+  /** One click: private ↔ normal. */
+  async togglePrivate(ev: CalEvent) {
+    const next = ev.sensitivity === "private" ? "normal" : "private";
+    const prev = ev.sensitivity;
+    this.patchEverywhere(ev.id, (e) => ({ ...e, sensitivity: next }));
+    try {
+      const updated = await api.eventUpdate(ev.accountId, ev.id, { sensitivity: next }, "occurrence");
+      this.events = sortEvents([...this.events.filter((e) => e.id !== ev.id && e.id !== updated.id), updated]);
+      toasts.show(next === "private" ? `“${ev.subject || "(no title)"}” is now private` : `“${ev.subject || "(no title)"}” is no longer private`, { kind: "success" });
+    } catch (e) {
+      this.patchEverywhere(ev.id, (x) => ({ ...x, sensitivity: prev }));
+      toasts.error(`Could not update: ${errMsg(e)}`);
+    }
+  }
+
+  /** Blocks a free gap as private focus time (one click from the agenda / rail). */
+  async createFocusBlock(start: string, end: string, accountId?: string | null) {
+    const acct = accountId ?? app.accountFilter ?? app.accounts[0]?.id;
+    if (!acct) return;
+    const cal = this.writableCalendars(acct).find((c) => c.isDefault);
+    try {
+      await this.create({
+        accountId: acct,
+        calendarId: cal?.id ?? null,
+        subject: "Focus time",
+        start,
+        end,
+        isAllDay: false,
+        attendees: [],
+        isOnline: false,
+        showAs: "busy",
+        reminderMinutes: -1,
+        sensitivity: "private",
+        body: "Blocked by Tern so this time stays free for focused work.",
+      });
+    } catch (e) {
+      toasts.error(`Could not block the time: ${errMsg(e)}`);
+    }
+  }
+
+  /** Composes an email listing free slots for the coming workdays (for scheduling by mail). */
+  async shareAvailability(days = 5, durationMins = 30) {
+    const acct = app.accountFilter ?? app.accounts[0]?.id;
+    if (!acct) return;
+    const s = this.settings;
+    try {
+      const from = toLocalIso(new Date(Math.max(Date.now(), startOfDay(this.now).getTime())));
+      const to = toLocalIso(addDays(startOfDay(this.now), days + 2));
+      const slots = await api.freeSlots({ accountId: acct, attendees: [], from, to, durationMins, workStart: s?.workStart, workEnd: s?.workEnd });
+      if (!slots.length) {
+        toasts.show("No free slots in working hours in the coming days", { kind: "error", timeout: 4000 });
+        return;
+      }
+      // Merge adjacent proposals into ranges per day for a readable list.
+      const byDay = new Map<string, string[]>();
+      for (const sl of slots) {
+        const k = dayKey(sl.start);
+        byDay.set(k, [...(byDay.get(k) ?? []), `${hhmm(sl.start)}–${hhmm(sl.end)}`]);
+      }
+      const lines = [...byDay.entries()].map(([k, times]) => `${weekdayDayMonth(k + "T00:00:00")}: ${times.join(", ")}`);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const text = `I'm free at the following times (${tz}):\n\n${lines.join("\n")}\n\nLet me know what suits you and I'll send an invitation.`;
+      const { composer } = await import("./composer.svelte");
+      const { textToHtml } = await import("$lib/ai");
+      composer.compose({ accountId: acct, subject: "Available times", bodyHtml: textToHtml(text) });
+    } catch (e) {
+      toasts.error(`Could not check availability: ${errMsg(e)}`);
+    }
+  }
+
+  // ---------- search ----------
+  private searchSeq = 0;
+  async search(q: string) {
+    this.searchQuery = q;
+    const seq = ++this.searchSeq;
+    if (!q.trim()) {
+      this.searchResults = [];
+      this.searching = false;
+      return;
+    }
+    this.searching = true;
+    try {
+      const res = await api.calendarSearch(q.trim(), 40);
+      if (seq !== this.searchSeq) return;
+      this.searchResults = res.filter((e) => !this.hidden.has(e.calendarId) && (!app.accountFilter || e.accountId === app.accountFilter));
+    } catch {
+      if (seq === this.searchSeq) this.searchResults = [];
+    } finally {
+      if (seq === this.searchSeq) this.searching = false;
+    }
+  }
+
+  /** Jump to a search hit: navigate to its date, make sure it is loaded, open it. */
+  jumpTo(ev: CalEvent) {
+    if (!this.events.some((e) => e.id === ev.id)) this.events = sortEvents([...this.events, ev]);
+    this.goto(new Date(ev.start), this.view === "month" || this.view === "agenda" ? this.view : "week");
+    this.openDetails(ev.id);
+  }
+
+  // ---------- keyboard time cursor ----------
+  /** Moves/creates the cursor. `dCol` days, `dMins` minutes; `grow` changes the length instead. */
+  moveCursor(dCol: number, dMins: number, grow = false) {
+    if (this.view !== "day" && this.view !== "week") return;
+    const n = this.days.length;
+    if (!this.cursor) {
+      const todayIdx = this.days.findIndex((d) => dayKey(d) === dayKey(this.now));
+      const base = Math.round((this.now.getHours() * 60 + this.now.getMinutes()) / 30) * 30;
+      const ws = this.settings?.workStart ?? "09:00";
+      const [wh, wm] = ws.split(":").map(Number);
+      this.cursor = { col: todayIdx >= 0 ? todayIdx : 0, mins: todayIdx >= 0 ? Math.min(1410, base) : (wh || 9) * 60 + (wm || 0), len: this.settings?.defaultDurationMins ?? 30 };
+      return;
+    }
+    const c = { ...this.cursor };
+    if (grow) c.len = Math.max(15, Math.min(1440 - c.mins, c.len + dMins));
+    else {
+      c.mins = Math.max(0, Math.min(1440 - 30, c.mins + dMins));
+      let col = c.col + dCol;
+      if (col < 0) {
+        this.prev();
+        col = n - 1;
+      } else if (col >= n) {
+        this.next();
+        col = 0;
+      }
+      c.col = col;
+    }
+    this.cursor = c;
+  }
+
+  cursorDay(): Date | null {
+    return this.cursor ? (this.days[this.cursor.col] ?? null) : null;
+  }
+
+  /** Enter on the cursor: new event at that slot. */
+  composeAtCursor() {
+    const d = this.cursorDay();
+    if (!d || !this.cursor) return;
+    this.composeAt(d, this.cursor.mins, this.cursor.len);
   }
 
   /** Drag / resize: new local start & end. */
@@ -588,6 +748,7 @@ class CalendarState {
       isAllDay: q.allDay,
       isOnline: q.isOnline,
       location: q.location,
+      sensitivity: q.isPrivate ? "private" : null,
       // The composer turns the preset into a Graph recurrence anchored on the start.
       repeat: q.repeat,
     });

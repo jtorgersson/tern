@@ -19,6 +19,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "t", label: "Calendar: today", group: "Navigate" },
   { keys: "n", label: "Calendar: new event", group: "Compose" },
   { keys: "e", label: "Calendar: edit event", group: "Act" },
+  { keys: "↑ ↓ ← →", label: "Calendar: move the time cursor (Shift+↑↓ resizes, Enter creates)", group: "Navigate" },
   { keys: "g i", label: "Go to inbox", group: "Navigate" },
   { keys: "g s", label: "Go to sent", group: "Navigate" },
   { keys: "g d", label: "Go to drafts", group: "Navigate" },
@@ -95,6 +96,7 @@ export function handleKey(e: KeyboardEvent) {
       calendar.closeComposer();
     }
     else if (calendar.detailsId && !isTyping(e)) calendar.openDetails(null);
+    else if (calendar.cursor && !isTyping(e)) calendar.cursor = null;
     else if (app.agentOpen && !isTyping(e)) app.agentOpen = false;
     else if (isTyping(e)) (e.target as HTMLElement).blur();
     else if (app.checked.size) app.checked = new Set();
@@ -129,12 +131,17 @@ export function handleKey(e: KeyboardEvent) {
 
   if (app.view.kind === "calendar") {
     const sel = calendar.selected;
+    const grid = calendar.view === "day" || calendar.view === "week";
     const cal: Record<string, () => void> = {
       j: () => calendar.moveSelection(1),
-      ArrowDown: () => calendar.moveSelection(1),
       k: () => calendar.moveSelection(-1),
-      ArrowUp: () => calendar.moveSelection(-1),
-      Enter: () => calendar.selectedId && calendar.openDetails(calendar.detailsId ? null : calendar.selectedId),
+      // Arrows drive the time cursor on the grid; elsewhere they page through events.
+      ArrowDown: () => (grid ? calendar.moveCursor(0, 30, e.shiftKey) : calendar.moveSelection(1)),
+      ArrowUp: () => (grid ? calendar.moveCursor(0, -30, e.shiftKey) : calendar.moveSelection(-1)),
+      Enter: () => {
+        if (grid && calendar.cursor && !calendar.detailsId) calendar.composeAtCursor();
+        else if (calendar.selectedId) calendar.openDetails(calendar.detailsId ? null : calendar.selectedId);
+      },
       o: () => calendar.selectedId && calendar.openDetails(calendar.selectedId),
       n: () => calendar.openComposer(),
       c: () => composer.compose(),
@@ -146,11 +153,11 @@ export function handleKey(e: KeyboardEvent) {
       m: () => calendar.setView("month"),
       a: () => calendar.setView("agenda"),
       h: () => calendar.prev(),
-      ArrowLeft: () => calendar.prev(),
+      ArrowLeft: () => (grid && calendar.cursor ? calendar.moveCursor(-1, 0) : calendar.prev()),
       l: () => calendar.next(),
-      ArrowRight: () => calendar.next(),
+      ArrowRight: () => (grid && calendar.cursor ? calendar.moveCursor(1, 0) : calendar.next()),
       t: () => calendar.today(),
-      "/": () => app.searchFocusTick++,
+      "/": () => calendar.searchFocusTick++,
       "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
       g: () => {
         pendingG = true;

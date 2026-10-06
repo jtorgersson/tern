@@ -8,6 +8,7 @@ export interface QuickAdd {
   end: Date;
   allDay: boolean;
   isOnline: boolean;
+  isPrivate: boolean;
   location: string | null;
   repeat: RepeatPreset;
   /** Which parts were recognised (for the live preview under the input). */
@@ -175,6 +176,11 @@ export function parseQuickAdd(input: string, now = new Date(), defaultDurationMi
     isOnline = true;
     text = cut(text, m);
   }
+  let isPrivate = false;
+  if ((m = text.match(/\b(private|privat)\b/i))) {
+    isPrivate = true;
+    text = cut(text, m);
+  }
   let location: string | null = null;
   if ((m = text.match(/\s@\s*([^@]+?)\s*$/)) || (m = text.match(/\s(?:at|på|i)\s+((?![\d])[A-ZÅÄÖ][^,]*?)\s*$/))) {
     location = m[1].trim();
@@ -205,7 +211,7 @@ export function parseQuickAdd(input: string, now = new Date(), defaultDurationMi
     if (end <= start) end = new Date(start.getTime() + defaultDurationMins * 60_000);
   }
   if (!subject && !matched.date && !matched.time) return null;
-  return { subject: subject || "(no title)", start, end, allDay, isOnline, location, repeat, matched };
+  return { subject: subject || "(no title)", start, end, allDay, isOnline, isPrivate, location, repeat, matched };
 }
 
 function nextHalfHour(now: Date): Date {

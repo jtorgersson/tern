@@ -2,12 +2,12 @@
   // Invitation card at the top of the reader for meeting-request / response messages.
   import { calendar } from "$lib/state/calendar.svelte";
   import { app } from "$lib/state/app.svelte";
-  import { agent } from "$lib/state/agent.svelte";
   import type { InviteAction, MessageFull } from "$lib/types";
   import { whenLabel, untilLabel, isPast, initialsOf, hm } from "$lib/util/cal";
   import { displayName } from "$lib/util/misc";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { CalendarDays, Video, MapPin, Check, CircleHelp, Ban, AlertTriangle, LoaderCircle, Sparkles, Crown } from "@lucide/svelte";
+  import { CalendarDays, Video, MapPin, Check, CircleHelp, Ban, AlertTriangle, LoaderCircle, Crown, CalendarClock } from "@lucide/svelte";
+  import ProposeTime from "./ProposeTime.svelte";
 
   let { message }: { message: MessageFull } = $props();
 
@@ -51,11 +51,11 @@
     }
   });
 
-  function proposeNewTime() {
-    if (!ev) return;
-    app.toggleAgent(true);
-    agent.send(`Propose 2–3 alternative times for "${ev.subject}" (currently ${whenLabel(ev)}) with ${ev.organizer?.name || ev.organizer?.email || "the organizer"}, then draft a reply to this invitation suggesting them.`);
-  }
+  let proposing = $state(false);
+  $effect(() => {
+    void message.id;
+    proposing = false;
+  });
 </script>
 
 <div class="invite" class:cancelled={type === "meetingCancelled" || ev?.isCancelled}>
@@ -124,8 +124,11 @@
           <label class="send"><input type="checkbox" checked={!sendResponse} onchange={(e) => (sendResponse = !(e.currentTarget as HTMLInputElement).checked)} /> Don't send a response</label>
           <span class="spacer"></span>
           {#if ev.joinUrl}<button class="link" onclick={() => openUrl(ev.joinUrl!)}><Video size={12} /> Join</button>{/if}
-          {#if app.aiReady}<button class="link" onclick={proposeNewTime}><Sparkles size={12} /> Propose a new time</button>{/if}
+          <button class="link" onclick={() => (proposing = !proposing)}><CalendarClock size={12} /> Propose a new time</button>
         </div>
+        {#if proposing}
+          <ProposeTime {ev} onclose={() => (proposing = false)} />
+        {/if}
       </div>
     {:else if ev.response === "organizer"}
       <div class="state">You organized this meeting.</div>

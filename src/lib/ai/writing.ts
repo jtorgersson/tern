@@ -4,7 +4,7 @@ import type { Backend, Effort } from "./backend";
 import { settings } from "./config";
 import { AiError, friendlyError, isAbort } from "./errors";
 import { emailBlock, nowLine, sentBlock, summaryBlock, threadBlock } from "./format";
-import { BRIEFING_SYSTEM, DRAFT_SYSTEM, REWRITE_SYSTEM, SUMMARY_SYSTEM, aboutMeBlock } from "./prompts";
+import { BRIEFING_SYSTEM, DRAFT_SYSTEM, PREP_SYSTEM, REWRITE_SYSTEM, SUMMARY_SYSTEM, aboutMeBlock } from "./prompts";
 import { backend } from "./providers";
 
 async function* run(
@@ -45,6 +45,28 @@ export function draftReply(opts: {
     `${context}\n\nWrite a reply to the email with id="${message.id}".\n` +
     `Instruction from the user: ${instruction.trim() || "Write an appropriate, helpful reply."}`;
   return run("main", DRAFT_SYSTEM, user, "medium", 8000, opts.signal);
+}
+
+/** Meeting prep brief from the event and the related mail found locally. */
+export function prepMeeting(ev: CalEvent, related: MessageFull[], signal?: AbortSignal): AsyncGenerator<string> {
+  const who = ev.attendees.map((a) => `${a.addr.name || a.addr.email} <${a.addr.email}> (${a.type}, ${a.response})`).join("; ");
+  const event = [
+    `<event>`,
+    `Subject: ${ev.subject}`,
+    `When: ${ev.start} – ${ev.end}${ev.isAllDay ? " (all day)" : ""}`,
+    ev.location ? `Where: ${ev.location}` : "",
+    ev.isOnline ? "Online: Teams" : "",
+    ev.organizer ? `Organizer: ${ev.organizer.name || ev.organizer.email} <${ev.organizer.email}>` : "",
+    who ? `Attendees: ${who}` : "",
+    `My response: ${ev.response}`,
+    ev.preview ? `Description: ${ev.preview}` : "",
+    `</event>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const mail = related.length ? related.map((m) => emailBlock(m, 3000)).join("\n\n") : "(no related emails found)";
+  const user = aboutMeBlock(settings().ai.aboutMe) + `Now: ${nowLine()}\n\n${event}\n\nRelated emails (newest first):\n\n${mail}`;
+  return run("main", PREP_SYSTEM, user, "low", 2500, signal);
 }
 
 export function rewrite(text: string, instruction: string, signal?: AbortSignal): AsyncGenerator<string> {
