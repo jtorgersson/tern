@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS annotations (
   summary TEXT NOT NULL,
   action_items_json TEXT NOT NULL DEFAULT '[]',
   needs_reply INTEGER NOT NULL DEFAULT 0,
-  due_at TEXT
+  due_at TEXT,
+  suggested_reply TEXT
 );
 
 CREATE TABLE IF NOT EXISTS contacts (
@@ -103,9 +104,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 );
 "#;
 
+/// Idempotent column additions for databases created by older versions.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('annotations') WHERE name = 'suggested_reply'")?
+        .exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE annotations ADD COLUMN suggested_reply TEXT")?;
+    }
+    Ok(())
+}
+
 const SUMMARY_COLS: &str = "m.id, m.account_id, m.folder_id, m.conversation_id, m.subject, m.from_name, m.from_email, \
   m.to_json, m.preview, m.received_at, m.is_read, m.is_flagged, m.has_attachments, m.importance, \
-  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at";
+  a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply";
 
 fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
     let id: String = r.get(0)?;
@@ -119,6 +131,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
             action_items: serde_json::from_str(&r.get::<_, String>(17)?).unwrap_or_default(),
             needs_reply: r.get::<_, i64>(18)? != 0,
             due_at: r.get(19)?,
+            suggested_reply: r.get(20)?,
         }),
         None => None,
     };
@@ -204,6 +217,7 @@ impl Db {
         }
         let conn = Connection::open(p)?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Db(Arc::new(Mutex::new(conn))))
     }
 
@@ -612,7 +626,8 @@ impl Db {
                  SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM messages WHERE id = ?1)
                  ON CONFLICT(message_id) DO UPDATE SET category=excluded.category, priority=excluded.priority,
                    summary=excluded.summary, action_items_json=excluded.action_items_json,
-                   needs_reply=excluded.needs_reply, due_at=excluded.due_at",
+                   needs_reply=excluded.needs_reply, due_at=excluded.due_at,
+                   suggested_reply = CASE WHEN excluded.needs_reply = 1 THEN annotations.suggested_reply ELSE NULL END",
             )?;
             for a in items {
                 st.execute(params![
@@ -628,6 +643,54 @@ impl Db {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn set_suggested_reply(&self, message_id: &str, text: Option<&str>) -> Result<()> {
+        let c = self.conn();
+        c.execute("UPDATE annotations SET suggested_reply = ? WHERE message_id = ?", params![text, message_id])?;
+        Ok(())
+    }
+
+    /// Sent messages (last `days`) whose conversation has no later message from someone other than the sender.
+    pub fn followups(&self, days: i64, limit: i64) -> Result<Vec<MessageSummary>> {
+        let c = self.conn();
+        let sql = format!(
+            "SELECT {SUMMARY_COLS} FROM messages m LEFT JOIN annotations a ON a.message_id = m.id
+             JOIN folders f ON f.id = m.folder_id AND f.well_known = 'sentitems'
+             WHERE m.is_draft = 0
+               AND m.received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?1)
+               AND m.received_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-18 hours')
+               AND m.to_json <> '[]'
+               AND NOT EXISTS (
+                 SELECT 1 FROM messages r
+                 WHERE r.account_id = m.account_id AND r.conversation_id = m.conversation_id AND m.conversation_id <> ''
+                   AND r.received_at > m.received_at AND lower(r.from_email) <> lower(m.from_email))
+               AND m.id = (
+                 SELECT m2.id FROM messages m2 JOIN folders f2 ON f2.id = m2.folder_id AND f2.well_known = 'sentitems'
+                 WHERE m2.account_id = m.account_id AND m2.conversation_id = m.conversation_id
+                 ORDER BY m2.received_at DESC LIMIT 1)
+             ORDER BY m.received_at DESC LIMIT ?2"
+        );
+        let mut st = c.prepare(&sql)?;
+        let rows = st
+            .query_map(params![format!("-{} days", days.clamp(1, 90)), limit.clamp(1, 200)], summary_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Inbox messages with a triage deadline: overdue (up to 7 days) and upcoming, soonest first.
+    pub fn due(&self, limit: i64) -> Result<Vec<MessageSummary>> {
+        let c = self.conn();
+        let sql = format!(
+            "SELECT {SUMMARY_COLS} FROM messages m JOIN annotations a ON a.message_id = m.id
+             WHERE a.due_at IS NOT NULL
+               AND m.folder_id IN (SELECT id FROM folders WHERE well_known = 'inbox')
+               AND a.due_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
+             ORDER BY a.due_at ASC LIMIT ?"
+        );
+        let mut st = c.prepare(&sql)?;
+        let rows = st.query_map([limit.clamp(1, 200)], summary_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     // ---------- bodies ----------
@@ -804,6 +867,7 @@ mod tests {
             action_items: vec!["Reply".into()],
             needs_reply: true,
             due_at: None,
+            suggested_reply: None,
         }])
         .unwrap();
         let cat = db.list(&q(MessageView::Category { category: "needs_reply".into() })).unwrap();
@@ -826,5 +890,62 @@ mod tests {
         // removing the account cascades
         db.remove_account("a1").unwrap();
         assert!(db.list(&q(MessageView::Search { query: "quart".into() })).unwrap().is_empty());
+    }
+
+    fn at(hours_ago: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::hours(hours_ago)).format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    }
+
+    #[test]
+    fn followups_due_and_predrafts() {
+        let db = mem();
+        seed(&db);
+        let mut sent = Folder { id: "sent".into(), account_id: "a1".into(), name: "Sent".into(), well_known: Some("sentitems".into()), parent_id: None, unread: 0, total: 0 };
+        let mut all = db.folders(Some("a1")).unwrap();
+        all.push(sent.clone());
+        db.replace_folders("a1", &all).unwrap();
+        sent.total = 3;
+
+        let mine = |id: &str, conv: &str, h: i64| {
+            let mut m = msg(id, "sent", "Proposal", &at(h));
+            m.conversation_id = conv.into();
+            m.from = Addr { name: "John".into(), email: "john@emcap.se".into() };
+            m
+        };
+        let theirs = |id: &str, conv: &str, h: i64| {
+            let mut m = msg(id, "inbox", "Re: Proposal", &at(h));
+            m.conversation_id = conv.into();
+            m
+        };
+        db.upsert_messages(&[
+            mine("s1", "c-waiting", 72),            // no reply -> follow-up
+            mine("s2", "c-answered", 96), theirs("r2", "c-answered", 50), // answered -> not
+            mine("s3", "c-twice", 120), mine("s4", "c-twice", 60),         // nudged already; latest counts once
+            mine("s5", "c-fresh", 2),               // too recent (< 18h)
+        ]).unwrap();
+        let f = db.followups(14, 50).unwrap();
+        let ids: Vec<&str> = f.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["s4", "s1"]);
+
+        // deadlines: soonest first, overdue within a week kept, ancient dropped
+        db.upsert_messages(&[theirs("d1", "x1", 5), theirs("d2", "x2", 6), theirs("d3", "x3", 7)]).unwrap();
+        let ann = |id: &str, due: Option<String>, reply: bool| Annotation {
+            message_id: id.into(), category: "action".into(), priority: 2, summary: "s".into(),
+            action_items: vec![], needs_reply: reply, due_at: due, suggested_reply: None,
+        };
+        db.set_annotations(&[
+            ann("d1", Some(at(-48)), true),   // in two days
+            ann("d2", Some(at(24)), false),   // yesterday (overdue)
+            ann("d3", Some(at(24 * 30)), false), // a month ago -> dropped
+        ]).unwrap();
+        let due: Vec<String> = db.due(10).unwrap().into_iter().map(|m| m.id).collect();
+        assert_eq!(due, vec!["d2", "d1"]);
+
+        // pre-drafts survive a triage re-run for needs_reply mail, are cleared otherwise
+        db.set_suggested_reply("d1", Some("Happy to — Thursday works.")).unwrap();
+        db.set_annotations(&[ann("d1", None, true)]).unwrap();
+        assert_eq!(db.summary("d1").unwrap().unwrap().ai.unwrap().suggested_reply.as_deref(), Some("Happy to — Thursday works."));
+        db.set_annotations(&[ann("d1", None, false)]).unwrap();
+        assert_eq!(db.summary("d1").unwrap().unwrap().ai.unwrap().suggested_reply, None);
     }
 }

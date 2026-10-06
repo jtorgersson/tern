@@ -403,3 +403,18 @@ pub fn messages_untriaged(st: St, limit: i64) -> R<Vec<MessageSummary>> {
 pub fn take_pending_mailto(st: St) -> Option<String> {
     st.pending_mailto.lock().unwrap().take()
 }
+
+#[tauri::command]
+pub fn annotation_set_reply(st: St, message_id: String, text: Option<String>) -> R<()> {
+    st.db.set_suggested_reply(&message_id, text.as_deref().filter(|t| !t.trim().is_empty())).map_err(err)
+}
+
+#[tauri::command]
+pub fn followups_list(st: St, days: Option<i64>, limit: Option<i64>) -> R<Vec<MessageSummary>> {
+    st.db.followups(days.unwrap_or(14), limit.unwrap_or(50)).map_err(err)
+}
+
+#[tauri::command]
+pub fn messages_due(st: St, limit: Option<i64>) -> R<Vec<MessageSummary>> {
+    st.db.due(limit.unwrap_or(20)).map_err(err)
+}

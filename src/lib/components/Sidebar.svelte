@@ -16,7 +16,9 @@
     Sparkles,
     Layers,
     Plus,
+    Sun,
   } from "@lucide/svelte";
+  import { today } from "$lib/state/today.svelte";
 
   const MAILBOXES: { wk: WellKnownFolder; icon: typeof Inbox }[] = [
     { wk: "inbox", icon: Inbox },
@@ -105,6 +107,11 @@
 
   <div class="scroll">
     <section>
+      <button class="item today" class:active={isActive({ kind: "today" })} onclick={() => app.setView({ kind: "today" })}>
+        <Sun size={15} />
+        <span class="name">Today</span>
+        {#if today.needsReply.length}<span class="count strong">{today.needsReply.length}</span>{/if}
+      </button>
       {#each MAILBOXES as m (m.wk)}
         {@const v: UiView = { kind: "unified", wellKnown: m.wk }}
         {@const unread = m.wk === "inbox" || m.wk === "junkemail" ? app.unifiedUnread(m.wk) : 0}
@@ -288,6 +295,10 @@
   }
   .item.active :global(svg) {
     color: var(--accent);
+  }
+  .item.today :global(svg) {
+    color: var(--accent);
+    opacity: 0.85;
   }
   .item.dim {
     opacity: 0.55;

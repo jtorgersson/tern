@@ -21,13 +21,30 @@
   let input: HTMLTextAreaElement | undefined = $state();
   let scroller: HTMLDivElement | undefined = $state();
 
-  const SUGGESTIONS = [
-    "What needs my attention today?",
-    "Archive all newsletters older than a week",
-    "Draft replies to anything waiting on me",
-    "Summarize unread from my boss",
-    "Find the latest invoice and tell me the amount",
-  ];
+  // Suggestions follow what the user is looking at.
+  const suggestions = $derived.by(() => {
+    const out: string[] = [];
+    const m = app.open;
+    if (m) {
+      const who = m.from.name?.split(/\s+/)[0] || m.from.email;
+      out.push(
+        "Summarize this thread",
+        `Draft a reply to ${who} declining politely`,
+        "What is being asked of me here?",
+        `Find everything else from ${who}`,
+      );
+    } else if (app.view.kind === "today") {
+      out.push("Plan my inbox for today", "What's the most urgent thing right now?", "Who is waiting on me, and for how long?");
+    } else if (app.view.kind === "search") {
+      out.push(`Dig deeper: find mail about “${app.view.query}”`, "Summarize these results");
+    } else if (app.view.kind === "category") {
+      out.push(`Summarize everything in ${app.viewTitle}`, `Archive everything in ${app.viewTitle} older than a week`);
+    } else {
+      out.push("What needs my attention today?", "Summarize unread from the last 24 hours");
+    }
+    out.push("Archive all newsletters older than a week", "Find the latest invoice and tell me the amount");
+    return [...new Set(out)].slice(0, 6);
+  });
 
   $effect(() => {
     if (app.agentOpen) tick().then(() => input?.focus());
@@ -109,7 +126,7 @@
           <h3>What can I do for you?</h3>
           <p>I can read, search, sort and draft mail. I'll always ask before sending or deleting anything.</p>
           <div class="sugg">
-            {#each SUGGESTIONS as s}
+            {#each suggestions as s (s)}
               <button onclick={() => agent.send(s)}>{s}</button>
             {/each}
           </div>

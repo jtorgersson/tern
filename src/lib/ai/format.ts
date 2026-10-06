@@ -71,6 +71,18 @@ export function summaryBlock(m: MessageSummary, key: string): string {
   ].join("\n");
 }
 
+/** Summary of a message the user sent (recipients instead of sender). */
+export function sentBlock(m: MessageSummary, key: string): string {
+  return [
+    `<email key="${key}" sent_by_user="true">`,
+    `To: ${neutralize(addrs(m.to))}`,
+    `Date: ${m.receivedAt}`,
+    `Subject: ${neutralize(m.subject)}`,
+    `Preview: ${neutralize(truncate(m.preview, 300))}`,
+    `</email>`,
+  ].join("\n");
+}
+
 export function threadBlock(thread: MessageFull[], perMessage = 6_000): string {
   // Oldest first; give later messages the full budget, older ones get less.
   return thread

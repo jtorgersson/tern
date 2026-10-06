@@ -6,6 +6,7 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MessageList from "$lib/components/MessageList.svelte";
   import Reader from "$lib/components/Reader.svelte";
+  import Today from "$lib/components/Today.svelte";
   import Composer from "$lib/components/Composer.svelte";
   import AgentPanel from "$lib/components/AgentPanel.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
@@ -68,12 +69,16 @@
 {:else}
   <div class="app">
     <TopBar />
-    <main style:--list-w="{listWidth}px">
+    <main style:--list-w="{listWidth}px" class:today={app.view.kind === "today"}>
       <Sidebar />
-      <MessageList />
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="resizer" onpointerdown={startResize}></div>
-      <Reader />
+      {#if app.view.kind === "today"}
+        <Today />
+      {:else}
+        <MessageList />
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="resizer" onpointerdown={startResize}></div>
+        <Reader />
+      {/if}
     </main>
   </div>
   <AgentPanel />
@@ -100,6 +105,9 @@
     display: grid;
     grid-template-columns: 236px var(--list-w) 0 minmax(0, 1fr);
   }
+  main.today {
+    grid-template-columns: 236px minmax(0, 1fr);
+  }
   .resizer {
     position: relative;
     width: 0;
@@ -120,6 +128,9 @@
   @media (max-width: 1100px) {
     main {
       grid-template-columns: 210px minmax(280px, 360px) 0 minmax(0, 1fr);
+    }
+    main.today {
+      grid-template-columns: 210px minmax(0, 1fr);
     }
   }
   @media (max-width: 820px) {

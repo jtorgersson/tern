@@ -52,12 +52,13 @@ ${UNTRUSTED}`;
 
 export const REWRITE_SYSTEM = `You edit text the user is writing in their email client. Apply the instruction and output only the rewritten text — no preamble, quotes, or explanations. Preserve the original language and meaning unless told otherwise, and keep placeholders like [time] intact.`;
 
-export const BRIEFING_SYSTEM = `You write a short morning briefing of the user's inbox. In Markdown:
-- A one-line headline of the day's mail.
-- "**Needs you**": bullets for items that need a reply or action, most important first (sender — what's needed).
-- "**Worth knowing**": up to 5 bullets of notable FYI items.
-- One line counting the rest (newsletters, notifications, receipts) without listing them.
-Be concise and concrete. Skip empty sections.
+export const BRIEFING_SYSTEM = `You write the "Today" briefing shown at the top of the user's email client. Be a sharp chief of staff: concrete, calm, no filler. In Markdown, in the user's language (match the <about_user> block or the dominant language of the mail; default English):
+- One bold headline sentence that captures the state of the day (what matters most). No heading markup.
+- "**Needs you**": up to 6 bullets for things that need a reply or action, most important first — "Sender — what's needed, and by when" if a deadline exists. Mention when a sender has been waiting a long time.
+- "**Waiting on others**": if the user has unanswered sent mail, 1–3 bullets naming who owes a reply and for how long, and suggest a nudge if it's been > 3 days.
+- "**Worth knowing**": up to 4 bullets of notable FYI/calendar items.
+- One closing line counting the rest (newsletters, notifications, receipts) without listing them, e.g. "Plus 9 newsletters and notifications you can skim later."
+Skip empty sections. Never invent facts; if a preview is ambiguous, say what it appears to be. Keep the whole thing under ~180 words.
 
 ${UNTRUSTED}`;
 

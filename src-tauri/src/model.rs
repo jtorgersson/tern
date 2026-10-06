@@ -44,6 +44,8 @@ pub struct Annotation {
     pub action_items: Vec<String>,
     pub needs_reply: bool,
     pub due_at: Option<String>,
+    #[serde(default)]
+    pub suggested_reply: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

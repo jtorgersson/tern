@@ -66,7 +66,7 @@ class AppState {
   categoryCounts = $state<Partial<Record<AiCategory, number>>>({});
 
   // ---- list ----
-  view = $state<UiView>({ kind: "unified", wellKnown: "inbox" });
+  view = $state<UiView>({ kind: "today" });
   accountFilter = $state<string | null>(null);
   unreadOnly = $state(false);
   messages = $state<MessageSummary[]>([]);
@@ -120,6 +120,8 @@ class AppState {
       configureAi(() => this.settings!);
       await this.listenAll();
       if (this.accounts.length) {
+        // Today is the home screen when AI is set up; otherwise start in the inbox.
+        if (!this.aiReady) this.view = { kind: "unified", wellKnown: "inbox" };
         await this.refreshFolders();
         await this.reload();
         this.refreshCounts();
@@ -189,6 +191,10 @@ class AppState {
     try {
       this.settings = await api.settingsSet(next);
       resetBackends();
+      import("./today.svelte").then(({ today }) => {
+        if (!this.settings?.ai.predraftReplies) today.cancelPredraft();
+        else today.schedulePredraft();
+      });
       if (this.theme) applyTheme(this.theme, this.settings.ui.translucent);
     } catch (e) {
       toasts.error(`Could not save settings: ${errMsg(e)}`);
@@ -303,6 +309,19 @@ class AppState {
     this.loading = true;
     try {
       let list: MessageSummary[];
+      if (this.view.kind === "today") {
+        const { today } = await import("./today.svelte");
+        await today.load();
+        if (seq !== this.loadSeq) return;
+        this.messages = [];
+        this.hasMore = false;
+        this.selectedId = null;
+        if (!keepSelection) {
+          this.open = null;
+          this.thread = [];
+        }
+        return;
+      }
       if (this.view.kind === "results") {
         const ids = this.view.ids;
         const fulls = await Promise.all(
@@ -337,7 +356,7 @@ class AppState {
   }
 
   async loadMore() {
-    if (this.loading || !this.hasMore || this.view.kind === "results") return;
+    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today") return;
     const last = this.messages[this.messages.length - 1];
     if (!last) return;
     this.loading = true;
@@ -386,6 +405,8 @@ class AppState {
   viewTitle = $derived.by(() => {
     const v = this.view;
     switch (v.kind) {
+      case "today":
+        return "Today";
       case "unified":
         return v.wellKnown === "inbox"
           ? this.accountFilter
@@ -411,6 +432,11 @@ class AppState {
 
   // ======================= selection & reader =======================
   select(id: string | null, openIt = true) {
+    if (id && this.view.kind === "today") {
+      // Leave Today for the inbox so the reader has a list to sit next to.
+      this.view = { kind: "unified", wellKnown: "inbox" };
+      this.reload(true).then(() => (this.selectedId = id));
+    }
     this.selectedId = id;
     if (id && openIt) this.openMessage(id);
   }
@@ -596,6 +622,9 @@ class AppState {
         if (pending.length < 25) break;
       }
       this.refreshCounts();
+      const { today } = await import("./today.svelte");
+      if (this.view.kind === "today") today.load({ silent: true });
+      else today.schedulePredraft();
     } catch (e) {
       console.warn("triage failed", e);
       toasts.show(`AI triage paused: ${errMsg(e)}`, { kind: "error", timeout: 6000 });

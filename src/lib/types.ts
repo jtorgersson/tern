@@ -61,6 +61,8 @@ export interface Annotation {
   needsReply: boolean;
   /** Optional ISO date when something is due. */
   dueAt: string | null;
+  /** Reply Tern drafted ahead of time (plain text), for needs_reply mail. */
+  suggestedReply: string | null;
 }
 
 export interface MessageSummary {
@@ -102,6 +104,7 @@ export interface MessageFull extends MessageSummary {
 }
 
 export type MessageView =
+  | { kind: "today" } // briefing / proactive view (no list query)
   | { kind: "folder"; folderId: string }
   | { kind: "unified"; wellKnown: WellKnownFolder } // across all accounts
   | { kind: "flagged" }
@@ -161,6 +164,8 @@ export interface Settings {
     defaultProviderId: string | null;
     triageProviderId: string | null;
     triageEnabled: boolean;
+    /** Draft replies ahead of time for needs_reply mail (priority >= 2). */
+    predraftReplies: boolean;
     /** Let the agent archive / mark read / flag without asking. Send & delete always ask. */
     autoApproveSafeActions: boolean;
     /** Free-text about the user ("I'm CEO at Emcap; keep replies short; Swedish with Swedes"). */

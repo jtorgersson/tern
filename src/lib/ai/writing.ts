@@ -3,7 +3,7 @@ import type { Account, MessageFull, MessageSummary } from "../types";
 import type { Backend, Effort } from "./backend";
 import { settings } from "./config";
 import { AiError, friendlyError, isAbort } from "./errors";
-import { emailBlock, nowLine, summaryBlock, threadBlock } from "./format";
+import { emailBlock, nowLine, sentBlock, summaryBlock, threadBlock } from "./format";
 import { BRIEFING_SYSTEM, DRAFT_SYSTEM, REWRITE_SYSTEM, SUMMARY_SYSTEM, aboutMeBlock } from "./prompts";
 import { backend } from "./providers";
 
@@ -52,15 +52,62 @@ export function rewrite(text: string, instruction: string, signal?: AbortSignal)
   return run("main", REWRITE_SYSTEM, user, "low", 8000, signal);
 }
 
-export async function briefing(msgs: MessageSummary[], signal?: AbortSignal): Promise<string> {
-  const lines = msgs.map((m, i) => {
-    const ai = m.ai ? `\nAI triage: ${m.ai.category}, priority ${m.ai.priority}: ${m.ai.summary}` : "";
-    return summaryBlock(m, `m${i + 1}`) + ai;
-  });
-  const user =
-    aboutMeBlock(settings().ai.aboutMe) +
-    `Now: ${nowLine()}\n\nInbox (${msgs.length} recent messages, newest first):\n\n${lines.join("\n\n")}`;
-  let out = "";
-  for await (const d of run("main", BRIEFING_SYSTEM, user, "low", 4000, signal)) out += d;
-  return out;
+export interface BriefingInput {
+  inbox: MessageSummary[];
+  /** Sent mail with no reply yet. */
+  waiting: MessageSummary[];
+  /** Inbox mail with a triage deadline. */
+  due: MessageSummary[];
 }
+
+function describe(m: MessageSummary, key: string): string {
+  const ai = m.ai
+    ? `\nAI triage: ${m.ai.category}, priority ${m.ai.priority}${m.ai.dueAt ? `, due ${m.ai.dueAt}` : ""}: ${m.ai.summary}`
+    : "";
+  return summaryBlock(m, key) + (m.isRead ? "\n(read)" : "\n(unread)") + ai;
+}
+
+/** Streams the Markdown briefing for the Today view. */
+export function briefing(input: BriefingInput, signal?: AbortSignal): AsyncGenerator<string> {
+  const parts: string[] = [aboutMeBlock(settings().ai.aboutMe) + `Now: ${nowLine()}`];
+  parts.push(
+    `Inbox (${input.inbox.length} recent messages, newest first):\n\n` +
+      (input.inbox.map((m, i) => describe(m, `m${i + 1}`)).join("\n\n") || "(empty)"),
+  );
+  if (input.waiting.length) {
+    parts.push(
+      `Mail the user sent that has not been answered yet (${input.waiting.length}):\n\n` +
+        input.waiting.map((m, i) => sentBlock(m, `sent${i + 1}`)).join("\n\n"),
+    );
+  }
+  if (input.due.length) {
+    parts.push(
+      `Items with deadlines:\n` +
+        input.due.map((m) => `- ${m.ai?.dueAt ?? "?"} — ${m.from.name || m.from.email}: ${m.ai?.summary ?? m.subject}`).join("\n"),
+    );
+  }
+  return run("main", BRIEFING_SYSTEM, parts.join("\n\n"), "low", 4000, signal);
+}
+
+/** Non-streaming reply draft used by the pre-drafting pipeline and the Today cards. */
+export async function predraftReply(opts: {
+  message: MessageFull;
+  thread?: MessageFull[];
+  account: Account;
+  instruction?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  let out = "";
+  for await (const d of draftReply({
+    message: opts.message,
+    thread: opts.thread,
+    account: opts.account,
+    instruction: opts.instruction ?? PREDRAFT_INSTRUCTION,
+    signal: opts.signal,
+  }))
+    out += d;
+  return out.trim();
+}
+
+export const PREDRAFT_INSTRUCTION =
+  "Write the reply you think the user would most likely want to send. If a decision is required that you can't know, draft the warm, non-committal version and leave a [bracketed placeholder] for the decision.";

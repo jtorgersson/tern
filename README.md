@@ -7,6 +7,7 @@ AI-native, keyboard-first mail for Omarchy. It's built with Tauri 2, Rust, and S
 - **AI that does the work:**
   - Triage sorts mail into *Needs reply / Action / FYI / Newsletters / Notifications / Receipts*.
   - It also writes thread TL;DRs, drafts replies in your voice, and rewrites text.
+  - A **Today** view opens with a streamed briefing of what matters, replies Tern drafted ahead of time for mail that needs an answer, mail you sent that nobody answered yet (with one-click nudges), and deadlines it spotted.
   - An **agent** (`Ctrl+J`) can search, read, archive, flag, move and draft for you. Sending and deleting always ask first.
 - **AI providers:** Anthropic (Claude, default `claude-opus-5-5`) or any OpenAI-compatible API (OpenAI, Ollama, LM Studio, OpenRouter, Groq…). Keys live in gnome-keyring.
 - **Local-first:** SQLite cache with full-text search at `~/.local/share/tern/tern.db`. Settings are in `~/.config/tern/settings.json`.
@@ -57,7 +58,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `r` / `Shift+R` / `f` | reply / reply all / forward |
 | `c` | compose |
 | `/` | search |
-| `g i` / `g s` / `g d` | inbox / sent / drafts |
+| `g t` / `g i` / `g s` / `g d` / `g x` | today / inbox / sent / drafts / trash |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |
 | `?` | all shortcuts |

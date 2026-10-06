@@ -17,6 +17,7 @@ pub fn defaults() -> Value {
             "defaultProviderId": null,
             "triageProviderId": null,
             "triageEnabled": true,
+            "predraftReplies": true,
             "autoApproveSafeActions": false,
             "aboutMe": ""
         },

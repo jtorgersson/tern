@@ -4,6 +4,7 @@
   import { draftReply } from "$lib/ai";
   import type { MessageFull } from "$lib/types";
   import { Sparkles, Reply, ReplyAll, Forward, ArrowUp } from "@lucide/svelte";
+  import DraftCard from "./DraftCard.svelte";
 
   let { message, thread }: { message: MessageFull; thread: MessageFull[] } = $props();
   let instruction = $state("");
@@ -33,6 +34,9 @@
 </script>
 
 <div class="qr">
+  {#if app.aiReady && message.ai?.needsReply && (message.ai.suggestedReply || message.ai.category === "needs_reply")}
+    <DraftCard {message} />
+  {/if}
   {#if app.aiReady}
     <form class="ask" onsubmit={submit}>
       <Sparkles size={14} />

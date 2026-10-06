@@ -11,6 +11,7 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { keys: "j / k", label: "Next / previous message", group: "Navigate" },
   { keys: "Enter / o", label: "Open message", group: "Navigate" },
+  { keys: "g t", label: "Go to Today", group: "Navigate" },
   { keys: "g i", label: "Go to inbox", group: "Navigate" },
   { keys: "g s", label: "Go to sent", group: "Navigate" },
   { keys: "g d", label: "Go to drafts", group: "Navigate" },
@@ -101,7 +102,8 @@ export function handleKey(e: KeyboardEvent) {
       s: () => app.setView({ kind: "unified", wellKnown: "sentitems" }),
       d: () => app.setView({ kind: "unified", wellKnown: "drafts" }),
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
-      t: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),
+      t: () => app.setView({ kind: "today" }),
+      x: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),
       f: () => app.setView({ kind: "flagged" }),
       r: () => app.setView({ kind: "category", category: "needs_reply" }),
     };

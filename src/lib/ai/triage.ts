@@ -57,6 +57,7 @@ export async function triage(msgs: MessageSummary[], signal?: AbortSignal): Prom
         actionItems: it.actionItems.map((a) => a.trim()).filter(Boolean).slice(0, 5),
         needsReply: it.needsReply,
         dueAt: it.dueAt && !Number.isNaN(Date.parse(it.dueAt)) ? it.dueAt : null,
+        suggestedReply: null,
       });
     }
   }

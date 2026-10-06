@@ -195,6 +195,9 @@ class Composer {
         await api.send(out);
         toasts.update(id, { kind: "success", text: "Sent", timeout: 2500 });
         app.scheduleRefresh();
+        if (out.refMessageId && (out.mode === "reply" || out.mode === "replyAll")) {
+          import("./today.svelte").then(({ today }) => today.clearReply(out.refMessageId!));
+        }
       } catch (e) {
         toasts.update(id, {
           kind: "error",

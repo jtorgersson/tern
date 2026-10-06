@@ -206,6 +206,10 @@
               <span><b>Smart inbox</b> — sort new mail into Needs reply, FYI, Newsletters… with a one-line summary.</span>
             </label>
             <label class="toggle">
+              <input type="checkbox" checked={s.ai.predraftReplies} onchange={(e) => app.patchSettings((st) => (st.ai.predraftReplies = (e.currentTarget as HTMLInputElement).checked))} />
+              <span><b>Pre-draft replies</b> — Tern writes a suggested reply for mail that needs one, ready on Today and in the reader. <span class="hint">Uses your AI provider for each reply-worthy email.</span></span>
+            </label>
+            <label class="toggle">
               <input type="checkbox" checked={s.ai.autoApproveSafeActions} onchange={(e) => app.patchSettings((st) => (st.ai.autoApproveSafeActions = (e.currentTarget as HTMLInputElement).checked))} />
               <span><b>Let the agent archive, flag and mark read without asking.</b> Sending and deleting always need your approval.</span>
             </label>

@@ -69,6 +69,9 @@ pub fn run() {
             commands::annotations_set,
             commands::messages_untriaged,
             commands::take_pending_mailto,
+            commands::annotation_set_reply,
+            commands::followups_list,
+            commands::messages_due,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tern");

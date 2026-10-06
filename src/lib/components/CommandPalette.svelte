@@ -42,6 +42,7 @@
       { id: "settings-acc", label: "Settings: Add account", group: "App", run: () => app.openSettings("accounts") },
       { id: "settings-look", label: "Settings: Appearance", group: "App", run: () => app.openSettings("appearance") },
       { id: "keys", label: "Keyboard shortcuts", group: "App", hint: "?", run: () => (app.cheatsheetOpen = true) },
+      { id: "today", label: "Go to Today", group: "Go to", hint: "g t", run: go({ kind: "today" }) },
       { id: "flagged", label: "Go to Flagged", group: "Go to", run: go({ kind: "flagged" }) },
     ];
     const wks: WellKnownFolder[] = ["inbox", "drafts", "sentitems", "archive", "deleteditems", "junkemail"];

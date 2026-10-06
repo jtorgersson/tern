@@ -61,4 +61,11 @@ export const api = {
   annotationsSet: (items: Annotation[]) => invoke<void>("annotations_set", { items }),
   /** Recent inbox messages that have no annotation yet, newest first. */
   untriaged: (limit: number) => invoke<MessageSummary[]>("messages_untriaged", { limit }),
+  /** Stores (or clears, with null) the pre-drafted reply on an existing annotation. */
+  annotationSetReply: (messageId: string, text: string | null) =>
+    invoke<void>("annotation_set_reply", { messageId, text }),
+  /** Sent messages from the last `days` days whose conversation has no later reply from someone else. Newest first. */
+  followups: (days = 14, limit = 50) => invoke<MessageSummary[]>("followups_list", { days, limit }),
+  /** Inbox messages with a triage deadline, soonest first (includes overdue up to 7 days). */
+  due: (limit = 20) => invoke<MessageSummary[]>("messages_due", { limit }),
 };
