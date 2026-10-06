@@ -5,7 +5,7 @@
   import { calendar } from "$lib/state/calendar.svelte";
   import { toasts } from "$lib/state/toasts.svelte";
   import { api } from "$lib/api";
-  import type { Addr, EventDraft, EventPatch, FreeSlot, Recurrence, ShowAs } from "$lib/types";
+  import type { Addr, EventDraft, EventFull, EventPatch, FreeSlot, Recurrence, ShowAs } from "$lib/types";
   import { addDays, dayKey, hm, startOfDay, toLocalIso, dayLabel, presetRecurrence, recurrencePreset, recurrenceLabel, type RepeatPreset } from "$lib/util/cal";
   import { dayMonth } from "$lib/util/fmt";
   import { parseQuickAdd } from "$lib/util/quickadd";
@@ -63,7 +63,10 @@
     if (!open) return;
     untrack(() => resetForm());
   });
+  /** Series master (fetched when editing a whole series) so the form edits the series' own start, not the clicked occurrence. */
+  let master = $state<EventFull | null>(null);
   function resetForm() {
+    master = null;
     const cal = app.settings?.calendar;
     const ev = calendar.composerEditing;
     const d: Partial<EventDraft> & { repeat?: RepeatPreset } = ev
@@ -113,7 +116,33 @@
     slots = [];
     more = !!ev || showAs !== "busy" || isPrivate;
     tick().then(() => subjectEl?.focus());
+    if (ev && calendar.composerScope === "series" && ev.seriesMasterId) loadMaster(ev.accountId, ev.seriesMasterId);
   }
+
+  /** Whole-series edits apply to the master: show its start date, duration, notes and rule. */
+  async function loadMaster(accountId: string, masterId: string) {
+    try {
+      const full = await api.eventGet(accountId, masterId);
+      if (!calendar.composerOpen || calendar.composerScope !== "series" || calendar.composerEditing?.seriesMasterId !== masterId) return;
+      master = full;
+      const m = full.event;
+      const s = new Date(m.start);
+      const e = new Date(m.end);
+      date = dayKey(s);
+      allDay = m.isAllDay;
+      endDate = allDay ? dayKey(new Date(e.getTime() - 1)) : dayKey(e);
+      startT = hm24(s);
+      endT = hm24(e);
+      body = full.bodyText;
+      origRecurrence = full.recurrence;
+      customRecurrence = full.recurrence;
+      repeat = recurrencePreset(full.recurrence);
+      repeatUntil = full.recurrence?.range?.type === "endDate" ? (full.recurrence.range.endDate ?? "") : "";
+    } catch (e) {
+      toasts.error(`Could not load the series: ${errMsg(e)}`);
+    }
+  }
+  const masterPending = $derived(!!editing && calendar.composerScope === "series" && !!editing.seriesMasterId && !master);
 
   const durationMins = $derived.by(() => {
     const s = new Date(`${date}T${startT}:00`).getTime();
@@ -243,9 +272,15 @@
           reminderMinutes: reminder < 0 ? null : reminder,
           sensitivity: isPrivate ? "private" : "normal",
         };
-        if (body.trim() !== (calendar.detailsFull?.event.id === editing.id ? calendar.detailsFull.bodyText : editing.preview).trim()) patch.body = body.trim() || null;
         const scope = calendar.composerScope;
-        if (scope === "series" && JSON.stringify(recurrence) !== JSON.stringify(origRecurrence)) patch.recurrence = recurrence;
+        if (scope === "series" && masterPending) {
+          toasts.error("Still loading the series — try again in a moment");
+          return;
+        }
+        const origBody = master ? master.bodyText : calendar.detailsFull?.event.id === editing.id ? calendar.detailsFull.bodyText : editing.preview;
+        if (body.trim() !== origBody.trim()) patch.body = body.trim() || null;
+        // Repeat rule: for a series (edits the master) or when turning a single event into a series.
+        if ((scope === "series" || !editing.seriesMasterId) && JSON.stringify(recurrence) !== JSON.stringify(origRecurrence)) patch.recurrence = recurrence;
         const ev = await calendar.update(editing, patch, scope);
         calendar.closeComposer();
         if (scope !== "series") calendar.openDetails(ev.id);
@@ -458,8 +493,8 @@
       </div>
 
       <footer>
-        <button class="btn primary" onclick={save} disabled={saving}>
-          {#if saving}<LoaderCircle size={14} class="spin" />{/if}
+        <button class="btn primary" onclick={save} disabled={saving || masterPending}>
+          {#if saving || masterPending}<LoaderCircle size={14} class="spin" />{/if}
           {editing ? (hasGuests ? "Save & send update" : "Save") : hasGuests ? "Send invitation" : "Save"} <kbd>^↵</kbd>
         </button>
         <button class="btn ghost" onclick={() => calendar.closeComposer()}>Cancel</button>

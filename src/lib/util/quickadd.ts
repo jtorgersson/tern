@@ -15,13 +15,13 @@ export interface QuickAdd {
 }
 
 const WEEKDAYS: [RegExp, number][] = [
-  [/\b(mon(day)?|må(n(dag)?)?)\b/i, 1],
-  [/\b(tue(s(day)?)?|tis(dag)?)\b/i, 2],
-  [/\b(wed(nesday)?|ons(dag)?)\b/i, 3],
-  [/\b(thu(rs(day)?)?|tors?(dag)?)\b/i, 4],
-  [/\b(fri(day)?|fre(dag)?)\b/i, 5],
-  [/\b(sat(urday)?|lör(dag)?)\b/i, 6],
-  [/\b(sun(day)?|sön(dag)?)\b/i, 0],
+  [/(?<![\p{L}\d])(mon(day)?|må(n(dag)?)?)(?![\p{L}\d])/iu, 1],
+  [/(?<![\p{L}\d])(tue(s(day)?)?|tis(dag)?)(?![\p{L}\d])/iu, 2],
+  [/(?<![\p{L}\d])(wed(nesday)?|ons(dag)?)(?![\p{L}\d])/iu, 3],
+  [/(?<![\p{L}\d])(thu(rs(day)?)?|tors?(dag)?)(?![\p{L}\d])/iu, 4],
+  [/(?<![\p{L}\d])(fri(day)?|fre(dag)?)(?![\p{L}\d])/iu, 5],
+  [/(?<![\p{L}\d])(sat(urday)?|lör(dag)?)(?![\p{L}\d])/iu, 6],
+  [/(?<![\p{L}\d])(sun(day)?|sön(dag)?)(?![\p{L}\d])/iu, 0],
 ];
 
 const MONTHS: Record<string, number> = {
@@ -58,7 +58,7 @@ export function parseQuickAdd(input: string, now = new Date(), defaultDurationMi
     [/\b(every|varje)\s+(day|dag)\b|\bdaily\b|\bdagligen\b/i, "daily"],
     [/\b(every|varje)\s+(week|vecka)\b|\bweekly\b|\bveckovis\b/i, "weekly"],
     [/\b(every|varje)\s+(month|månad)\b|\bmonthly\b|\bmånadsvis\b/i, "monthly"],
-    [/\b(every|varje)\s+(year|år)\b|\byearly\b|\bannually\b|\bårligen\b/i, "yearly"],
+    [/(?<![\p{L}])(every|varje)\s+(year|år)(?![\p{L}])|\byearly\b|\bannually\b|(?<![\p{L}])årligen(?![\p{L}])/iu, "yearly"],
   ];
   for (const [re, p] of rep) {
     const m = text.match(re);
@@ -70,7 +70,7 @@ export function parseQuickAdd(input: string, now = new Date(), defaultDurationMi
     }
   }
   // "every monday" / "varje måndag" → weekly on that day (the weekday itself is parsed below).
-  const everyDay = text.match(/\b(every|varje)\s+(?=(mon|tue|wed|thu|fri|sat|sun|må|tis|ons|tor|fre|lör|sön))/i);
+  const everyDay = text.match(/\b(every|varje)\s+(?=(mon|tue|wed|thu|fri|sat|sun|må|tis|ons|tor|fre|lör|sön))/iu);
   if (everyDay) {
     repeat = "weekly";
     text = cut(text, everyDay);
@@ -83,7 +83,7 @@ export function parseQuickAdd(input: string, now = new Date(), defaultDurationMi
   if ((m = text.match(/\b(today|idag)\b/i))) {
     day = startOfDay(now);
     text = cut(text, m);
-  } else if ((m = text.match(/\b(day after tomorrow|övermorgon)\b/i))) {
+  } else if ((m = text.match(/(?<![\p{L}])(day after tomorrow|övermorgon)(?![\p{L}])/iu))) {
     day = addDays(startOfDay(now), 2);
     text = cut(text, m);
   } else if ((m = text.match(/\b(tomorrow|tmrw|imorgon|imorron)\b/i))) {

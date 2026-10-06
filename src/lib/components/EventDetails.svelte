@@ -33,8 +33,12 @@
     confirmDelete = null;
     cancelNote = "";
   });
+  let seenDeleteRequest = 0;
   $effect(() => {
-    if (calendar.deleteRequest && ev && canEdit) confirmDelete = { scope: "occurrence" };
+    const n = calendar.deleteRequest;
+    if (n === seenDeleteRequest) return;
+    seenDeleteRequest = n;
+    if (ev && canEdit) confirmDelete = { scope: "occurrence" };
   });
 
   async function respond(action: InviteAction) {

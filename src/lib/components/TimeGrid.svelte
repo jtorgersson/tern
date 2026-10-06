@@ -5,7 +5,7 @@
   import { app } from "$lib/state/app.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
   import type { CalEvent } from "$lib/types";
-  import { addDays, dayKey, layoutDay, minutesIntoDay, snap, toLocalIso, isBusy, hm, durationLabel, type Placed } from "$lib/util/cal";
+  import { addDays, dayKey, layoutDay, minutesBetween, minutesIntoDay, snap, toLocalIso, isBusy, hm, durationLabel, type Placed } from "$lib/util/cal";
   import { weekdayShort } from "$lib/util/fmt";
   import { Video, MapPin, Repeat, Lock, CircleAlert } from "@lucide/svelte";
   import { tick } from "svelte";
@@ -92,7 +92,11 @@
     const r = el.getBoundingClientRect();
     const nearBottom = e.clientY > r.bottom - 8;
     if (nearBottom && canEdit(ev)) drag = { kind: "resize", ev, col, top: p.top, bottom: p.bottom, moved: false };
-    else drag = { kind: "move", ev, col, startCol: col, grab: y - p.top, dur: p.bottom - p.top, top: p.top, moved: false };
+    else {
+      // Real start and length (the drawn box is padded to a minimum height and clipped to the day).
+      const realTop = minutesIntoDay(ev.start, cols[col].day);
+      drag = { kind: "move", ev, col, startCol: col, grab: y - realTop, dur: minutesBetween(ev.start, ev.end), top: realTop, moved: false };
+    }
     el.setPointerCapture(e.pointerId);
   }
   function onMove(e: PointerEvent) {
@@ -103,7 +107,7 @@
       drag = { ...drag, to: Math.max(drag.from + STEP, m), moved: true };
     } else if (drag.kind === "move") {
       if (!canEdit(drag.ev)) return;
-      const top = Math.max(0, Math.min(1440 - drag.dur, snap(y - drag.grab, STEP)));
+      const top = Math.max(0, Math.min(1440 - Math.min(drag.dur, 1440), snap(y - drag.grab, STEP)));
       drag = { ...drag, top, col: xToCol(e.clientX), moved: drag.moved || Math.abs(top - minutesIntoDay(drag.ev.start, cols[drag.startCol].day)) >= STEP || xToCol(e.clientX) !== drag.startCol };
     } else {
       drag = { ...drag, bottom: Math.max(drag.top + STEP, Math.min(1440, snap(y, STEP))), moved: true };
@@ -131,10 +135,14 @@
     return !ev.isCancelled && (calendar.calendarById.get(ev.calendarId)?.canEdit ?? true);
   }
 
-  /** Where an event is drawn, taking an in-progress drag into account. */
+  /** Where an event is drawn, taking an in-progress drag into account (clipped to the day like layoutDay). */
   function box(p: Placed<CalEvent>, colIdx: number): { top: number; height: number; hidden: boolean } {
     if (drag && drag.kind !== "create" && drag.ev.id === p.item.id) {
-      if (drag.kind === "move") return { top: drag.top, height: drag.dur, hidden: drag.col !== colIdx };
+      if (drag.kind === "move") {
+        const top = Math.max(0, drag.top);
+        const bottom = Math.min(1440, Math.max(top + 20, drag.top + drag.dur));
+        return { top, height: bottom - top, hidden: drag.col !== colIdx };
+      }
       return { top: drag.top, height: drag.bottom - drag.top, hidden: false };
     }
     return { top: p.top, height: p.bottom - p.top, hidden: false };
@@ -210,10 +218,11 @@
               {@const e = p.item}
               {@const b = box(p, ci)}
               {@const w = 100 / p.cols}
-              {#if !b.hidden}
+                <!-- Stays mounted while hidden: it holds the pointer capture during a cross-day drag. -->
                 <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                 <div
                   class="ev"
+                  class:hidden={b.hidden}
                   class:past={past(e)}
                   class:cancelled={e.isCancelled}
                   class:declined={e.response === "declined"}
@@ -247,7 +256,6 @@
                   {/if}
                   {#if canEdit(e)}<div class="rs"></div>{/if}
                 </div>
-              {/if}
             {/each}
             {#if ghost && ghost.col === ci}
               <div class="ghost" style:top="{(ghost.top / 60) * HOUR}px" style:height="{(ghost.height / 60) * HOUR - 2}px">
@@ -457,6 +465,9 @@
   .ev.sel {
     box-shadow: 0 0 0 2px var(--accent-line);
     z-index: 3;
+  }
+  .ev.hidden {
+    visibility: hidden;
   }
   .ev.dragging {
     opacity: 0.85;

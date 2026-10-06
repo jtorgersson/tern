@@ -57,6 +57,17 @@ describe("parseQuickAdd", () => {
     expect(q.subject).toBe("Think");
     expect(iso(q.start)).toBe("2026-10-06T10:30");
   });
+  test("swedish tokens with å/ä/ö", () => {
+    const a = parseQuickAdd("Lunch övermorgon 12", NOW)!;
+    expect(a.subject).toBe("Lunch");
+    expect(iso(a.start)).toBe("2026-10-08T12:00");
+    const b = parseQuickAdd("Fest årligen 20/12", NOW)!;
+    expect(b.repeat).toBe("yearly");
+    expect(b.subject).toBe("Fest");
+    const c = parseQuickAdd("Standup varje må 9", NOW)!;
+    expect(c.repeat).toBe("weekly");
+    expect(iso(c.start)).toBe("2026-10-12T09:00");
+  });
   test("empty input", () => {
     expect(parseQuickAdd("   ", NOW)).toBeNull();
   });

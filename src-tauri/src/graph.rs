@@ -340,7 +340,8 @@ fn normalize_recurrence(mut r: Value, start: &str, tz: &str) -> Value {
         if r["range"].is_null() {
             r["range"] = json!({ "type": "noEnd" });
         }
-        if r["range"]["startDate"].is_null() {
+        // A rule's range must start on the event's own date; override whatever the caller guessed.
+        if start.len() >= 10 {
             r["range"]["startDate"] = json!(start.chars().take(10).collect::<String>());
         }
         if r["range"]["recurrenceTimeZone"].is_null() {
@@ -397,8 +398,22 @@ pub async fn create_event(st: &AppState, tz: &str, d: &EventDraft) -> Result<Cal
     Ok(parse_event_in(&d.account_id, d.calendar_id.as_deref().unwrap_or(""), tz, &v))
 }
 
+/// Start of an event as stored on the server ("YYYY-MM-DDTHH:MM:SS" wall clock in `tz`).
+pub async fn event_start(st: &AppState, account_id: &str, tz: &str, event_id: &str) -> Result<String> {
+    let resp = send_raw(st, account_id, Method::GET, &format!("/me/events/{event_id}?$select=id,start"), None, Some(&tz_prefer(tz))).await?;
+    let v: Value = resp.json().await?;
+    Ok(wall(&v["start"]))
+}
+
 /// PATCH /me/events/{id}. Pass an occurrence id to change one occurrence, the series master id for the whole series.
+/// A recurrence rule needs `range.startDate` = the event's start date; when the patch has a rule but no new start,
+/// the current start is read from the server first.
 pub async fn update_event(st: &AppState, account_id: &str, calendar_id: &str, tz: &str, event_id: &str, p: &EventPatch) -> Result<CalEvent> {
+    let anchor_start = match (&p.start, &p.recurrence) {
+        (Some(s), _) => Some(s.clone()),
+        (None, Some(Some(_))) => Some(event_start(st, account_id, tz, event_id).await?),
+        _ => None,
+    };
     let mut body = json!({});
     if let Some(s) = &p.subject {
         body["subject"] = json!(s);
@@ -447,7 +462,7 @@ pub async fn update_event(st: &AppState, account_id: &str, calendar_id: &str, tz
     }
     if let Some(r) = &p.recurrence {
         body["recurrence"] = match r {
-            Some(r) if r.is_object() => normalize_recurrence(r.clone(), p.start.as_deref().unwrap_or("2000-01-01"), tz),
+            Some(r) if r.is_object() => normalize_recurrence(r.clone(), anchor_start.as_deref().unwrap_or(""), tz),
             _ => Value::Null,
         };
     }
