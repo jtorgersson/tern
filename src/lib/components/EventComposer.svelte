@@ -13,7 +13,7 @@
   import { errMsg } from "$lib/util/misc";
   import AddressInput from "./AddressInput.svelte";
   import { X, Video, MapPin, Sparkles, LoaderCircle, Calendar as CalIcon, Clock, AlignLeft, Repeat, Bell, Lock, Users, Zap, Trash2 } from "@lucide/svelte";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
 
   const open = $derived(calendar.composerOpen);
   const editing = $derived(calendar.composerEditing);
@@ -57,9 +57,13 @@
     return x;
   }
 
-  // Reset from the draft / the event being edited each time the sheet opens.
+  // Reset from the draft / the event being edited each time the sheet opens (and only then: untrack keeps
+  // later store changes, e.g. a calendar refresh, from wiping what the user typed).
   $effect(() => {
     if (!open) return;
+    untrack(() => resetForm());
+  });
+  function resetForm() {
     const cal = app.settings?.calendar;
     const ev = calendar.composerEditing;
     const d: Partial<EventDraft> & { repeat?: RepeatPreset } = ev
@@ -109,7 +113,7 @@
     slots = [];
     more = !!ev || showAs !== "busy" || isPrivate;
     tick().then(() => subjectEl?.focus());
-  });
+  }
 
   const durationMins = $derived.by(() => {
     const s = new Date(`${date}T${startT}:00`).getTime();
