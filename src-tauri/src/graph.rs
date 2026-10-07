@@ -48,7 +48,10 @@ async fn send_raw(
         match body {
             Some(b) => req = req.json(b),
             // Graph answers 411 to a body-less POST/PATCH (e.g. `/send`) unless Content-Length: 0 is sent.
-            None if matches!(method, Method::POST | Method::PATCH | Method::PUT) => req = req.body(""),
+            // hyper omits the header for an empty body (`body("")` is not enough), so set it explicitly.
+            None if matches!(method, Method::POST | Method::PATCH | Method::PUT) => {
+                req = req.header(reqwest::header::CONTENT_LENGTH, "0")
+            }
             None => {}
         }
         let resp = req.send().await?;
