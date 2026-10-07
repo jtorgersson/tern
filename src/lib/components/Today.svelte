@@ -37,7 +37,7 @@
   // Only greet by name when the primary account's display name looks like a person (two+ words),
   // not a company label like "Emcap".
   const firstName = $derived.by(() => {
-    const n = (app.accounts[0]?.displayName || "").trim();
+    const n = (app.ownAccounts[0]?.displayName || "").trim();
     return /\s/.test(n) ? n.split(/\s+/)[0] : "";
   });
   const dateLine = weekdayDayMonthLong(now);

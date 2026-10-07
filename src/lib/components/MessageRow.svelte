@@ -38,6 +38,7 @@
   tabindex="-1"
   data-id={m.id}
   onclick={(e) => (e.ctrlKey || e.metaKey ? app.toggleCheck(m.id) : app.select(m.id))}
+  ondblclick={(e) => !e.ctrlKey && !e.metaKey && app.openInWindow(m.id)}
   onkeydown={() => {}}>
   {#if showAccount && acct}
     <span class="stripe" style:background={hueColor(acct.hue, app.mode)}></span>

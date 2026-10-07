@@ -14,6 +14,12 @@ export interface Account {
   lastSync: string | null; // ISO
   status: "ok" | "syncing" | "error" | "reauth";
   statusMessage: string | null;
+  /** Set for a shared mailbox or someone else's calendar: the signed-in account that opens it. */
+  ownerId: string | null;
+  /** False for calendar-only accounts (a shared calendar without mailbox access). */
+  syncMail: boolean;
+  /** The user allowed the shared-mailbox Graph scopes on this (own) account. */
+  sharedConsent: boolean;
 }
 
 export type WellKnownFolder =
@@ -367,6 +373,10 @@ export interface Settings {
     translucent: boolean;
     /** Language for dates and weekday/month names. Times are always 24-hour, weeks start on Monday. */
     locale: "en-GB" | "sv-SE";
+    /** "theme" uses the Omarchy colors as they are; higher / highest deepen the background and lift text. */
+    contrast: Contrast;
+    /** "off" hides the reader: messages open in their own window. */
+    readingPane: "right" | "off";
   };
   signatures: Record<string, string>; // accountId -> html
   syncIntervalSecs: number;
@@ -394,6 +404,8 @@ export interface Settings {
     speedyMeetings: number;
   };
 }
+
+export type Contrast = "theme" | "higher" | "highest";
 
 export type CalView = "day" | "week" | "month" | "agenda" | "insights";
 

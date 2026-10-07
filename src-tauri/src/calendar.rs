@@ -57,7 +57,13 @@ async fn pull_range(st: &AppState, acc: &Account, from: NaiveDateTime, to: Naive
         Ok(_) => vec![],
         Err(e) => {
             log::warn!("calendars list failed for {}: {e:#}", acc.email);
-            st.db.calendars(Some(&acc.id)).unwrap_or_default()
+            let cached = st.db.calendars(Some(&acc.id)).unwrap_or_default();
+            // Someone who shared only their calendar folder: the list is off limits, the calendar itself isn't.
+            if cached.is_empty() && acc.owner_id.is_some() {
+                graph::default_calendar(st, &acc.id).await.map(|c| vec![c]).unwrap_or_default()
+            } else {
+                cached
+            }
         }
     };
     let mut events = Vec::new();
@@ -247,7 +253,10 @@ pub fn start_reminders(app: AppHandle) {
             let now = now_local();
             let until = now + Duration::minutes(minutes);
             let Ok(events) = st.db.events(&fmt(now), &fmt(until + Duration::hours(1)), None) else { continue };
-            for e in events {
+            // Other people's calendars (shared mailboxes, colleagues) are for looking at, not for reminding.
+            let shared: HashSet<String> =
+                st.db.accounts().unwrap_or_default().into_iter().filter(|a| a.owner_id.is_some()).map(|a| a.id).collect();
+            for e in events.into_iter().filter(|e| !shared.contains(&e.account_id)) {
                 let Some(start) = parse(&e.start) else { continue };
                 if start < now || start > until || e.is_all_day || e.is_cancelled || e.response == "declined" {
                     continue;

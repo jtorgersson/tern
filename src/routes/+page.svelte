@@ -19,6 +19,11 @@
   import Onboarding from "$lib/components/Onboarding.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Logo from "$lib/components/Logo.svelte";
+  import MessageWindow from "$lib/components/MessageWindow.svelte";
+  import { messageWindowId } from "$lib/util/windows";
+
+  /** Set when this webview is a pop-out window for one message. */
+  const popupId = messageWindowId();
 
   const LIST_KEY = "tern.listWidth";
   let listWidth = $state(420);
@@ -27,7 +32,8 @@
   } catch {}
 
   onMount(() => {
-    app.init();
+    if (popupId) app.initMessageWindow(popupId);
+    else app.init();
     return () => app.destroy();
   });
 
@@ -68,12 +74,14 @@
       <button class="btn" onclick={() => location.reload()}>Retry</button>
     </div>
   </div>
+{:else if popupId}
+  <MessageWindow />
 {:else if !app.hasAccounts || app.onboarding}
   <Onboarding />
 {:else}
   <div class="app">
     <TopBar />
-    <main style:--list-w="{listWidth}px" class:today={app.isCanvasView}>
+    <main style:--list-w="{listWidth}px" class:today={app.isCanvasView} class:no-pane={!app.isCanvasView && !app.readingPane}>
       <Sidebar />
       {#if app.view.kind === "today"}
         <Today />
@@ -81,9 +89,11 @@
         <Calendar />
       {:else}
         <MessageList />
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="resizer" onpointerdown={startResize}></div>
-        <Reader />
+        {#if app.readingPane}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="resizer" onpointerdown={startResize}></div>
+          <Reader />
+        {/if}
       {/if}
     </main>
   </div>
@@ -114,7 +124,8 @@
     display: grid;
     grid-template-columns: 236px var(--list-w) 0 minmax(0, 1fr);
   }
-  main.today {
+  main.today,
+  main.no-pane {
     grid-template-columns: 236px minmax(0, 1fr);
   }
   .resizer {
@@ -138,13 +149,17 @@
     main {
       grid-template-columns: 210px minmax(280px, 360px) 0 minmax(0, 1fr);
     }
-    main.today {
+    main.today,
+    main.no-pane {
       grid-template-columns: 210px minmax(0, 1fr);
     }
   }
   @media (max-width: 820px) {
     main {
       grid-template-columns: 0 minmax(260px, 1fr) 0 minmax(0, 1.4fr);
+    }
+    main.no-pane {
+      grid-template-columns: minmax(0, 1fr);
     }
     main :global(.sidebar) {
       display: none;

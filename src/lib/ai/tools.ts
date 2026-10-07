@@ -273,12 +273,18 @@ export const TOOLS = [
   }),
   def({
     name: "list_accounts",
-    description: "List the user's mail accounts.",
+    description: "List the user's accounts: their own, plus shared mailboxes and colleagues' calendars they have opened (kind).",
     schema: z.object({}),
     approval: "never",
     label: () => "Checking accounts",
     async run(_i, ctx) {
-      return (await ctx.accounts()).map((a) => ({ id: a.id, name: a.displayName, email: a.email, status: a.status }));
+      return (await ctx.accounts()).map((a) => ({
+        id: a.id,
+        name: a.displayName,
+        email: a.email,
+        status: a.status,
+        kind: a.ownerId ? (a.syncMail ? "shared mailbox" : "shared calendar (no mail)") : "own",
+      }));
     },
   }),
   def({

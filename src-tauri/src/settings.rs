@@ -26,7 +26,9 @@ pub fn defaults() -> Value {
             "remoteImages": "ask",
             "mailRendering": "adaptive",
             "translucent": true,
-            "locale": "en-GB"
+            "locale": "en-GB",
+            "contrast": "higher",
+            "readingPane": "right"
         },
         "signatures": {},
         "syncIntervalSecs": 60,

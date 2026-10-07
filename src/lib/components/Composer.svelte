@@ -164,12 +164,12 @@
       </header>
 
       <div class="fields">
-        {#if app.accounts.length > 1}
+        {#if app.mailAccounts.length > 1}
           <div class="from">
             <span class="lbl">From</span>
             <span class="fdot" style:background={hueColor(app.accountById.get(d.accountId)?.hue ?? 0, app.mode)}></span>
             <select bind:value={d.accountId}>
-              {#each app.accounts as a (a.id)}
+              {#each app.mailAccounts as a (a.id)}
                 <option value={a.id}>{a.displayName ? `${a.displayName} <${a.email}>` : a.email}</option>
               {/each}
             </select>

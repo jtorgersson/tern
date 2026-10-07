@@ -51,7 +51,7 @@
 
   async function load(e: CalEvent) {
     searching = true;
-    const me = new Set(app.accounts.map((a) => a.email.toLowerCase()));
+    const me = new Set(app.ownAccounts.map((a) => a.email.toLowerCase()));
     const people = [...(e.organizer ? [e.organizer] : []), ...e.attendees.map((a) => a.addr)]
       .map((a) => a.email.toLowerCase())
       .filter((x, i, arr) => x && !me.has(x) && arr.indexOf(x) === i)

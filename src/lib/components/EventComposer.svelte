@@ -88,7 +88,7 @@
           body: calendar.detailsFull?.event.id === ev.id ? calendar.detailsFull.bodyText : ev.preview,
         }
       : (calendar.composerDraft ?? {});
-    accountId = d.accountId ?? app.accountFilter ?? app.accounts[0]?.id ?? "";
+    accountId = d.accountId ?? app.accountFilter ?? app.ownAccounts[0]?.id ?? "";
     const writable = calendar.writableCalendars(accountId);
     calendarId = d.calendarId && writable.some((c) => c.id === d.calendarId) ? d.calendarId : (writable.find((c) => c.isDefault)?.id ?? "");
     subject = d.subject ?? "";

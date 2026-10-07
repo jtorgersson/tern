@@ -26,6 +26,18 @@ pub struct GraphError {
     pub message: String,
 }
 
+/// Shared mailboxes and other people's calendars are separate accounts opened with their owner's token:
+/// their `/me/...` paths address `/users/{mailbox}/...` instead.
+pub fn scoped(st: &AppState, account_id: &str, url: &str) -> String {
+    let Some(rest) = url.strip_prefix("/me").filter(|r| r.is_empty() || r.starts_with('/') || r.starts_with('?')) else {
+        return url.to_string();
+    };
+    match st.db.account(account_id).ok().flatten() {
+        Some(a) if a.owner_id.is_some() => format!("/users/{}{rest}", a.email),
+        _ => url.to_string(),
+    }
+}
+
 async fn send_raw(
     st: &AppState,
     account_id: &str,
@@ -34,6 +46,7 @@ async fn send_raw(
     body: Option<&Value>,
     extra_prefer: Option<&str>,
 ) -> Result<reqwest::Response> {
+    let url = &scoped(st, account_id, url);
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -57,7 +70,7 @@ async fn send_raw(
         let resp = req.send().await?;
         let status = resp.status();
         if status == StatusCode::UNAUTHORIZED && attempt == 1 {
-            st.tokens.lock().unwrap().remove(account_id);
+            st.tokens.lock().unwrap().remove(&auth::token_account(st, account_id));
             continue;
         }
         if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) && attempt <= 3 {
@@ -271,6 +284,30 @@ pub async fn calendars(st: &AppState, account_id: &str) -> Result<Vec<CalendarIn
     )
     .await?;
     Ok(v["value"].as_array().into_iter().flatten().map(|c| parse_calendar(account_id, c)).collect())
+}
+
+/// The default calendar alone — what a delegate sees when only that folder is shared with them.
+pub async fn default_calendar(st: &AppState, account_id: &str) -> Result<CalendarInfo> {
+    let v = call(st, account_id, Method::GET, "/me/calendar?$select=id,name,color,hexColor,isDefaultCalendar,canEdit,owner", None).await?;
+    let mut c = parse_calendar(account_id, &v);
+    c.is_default = true;
+    Ok(c)
+}
+
+/// Checks that the account's mailbox (or, for calendar-only, its calendar) can be opened.
+/// Returns the owner's display name when Graph tells it.
+pub async fn probe(st: &AppState, account_id: &str, mail: bool) -> Result<Option<String>> {
+    if mail {
+        call(st, account_id, Method::GET, "/me/mailFolders/inbox?$select=id", None).await?;
+    }
+    match call(st, account_id, Method::GET, "/me/calendar?$select=id,owner", None).await {
+        Ok(v) => Ok(v.pointer("/owner/name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()).map(String::from)),
+        Err(e) if mail => {
+            log::info!("shared mailbox without a readable calendar: {e:#}");
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Expanded occurrences in [from_utc, to_utc) ("YYYY-MM-DDTHH:MM:SSZ"), times rendered in `tz`.
@@ -583,7 +620,7 @@ pub async fn folders(st: &AppState, account_id: &str) -> Result<Vec<Folder>> {
     let reqs: Vec<Value> = WELL_KNOWN
         .iter()
         .enumerate()
-        .map(|(i, wk)| json!({ "id": i.to_string(), "method": "GET", "url": format!("/me/mailFolders/{wk}?$select=id") }))
+        .map(|(i, wk)| json!({ "id": i.to_string(), "method": "GET", "url": scoped(st, account_id, &format!("/me/mailFolders/{wk}?$select=id")) }))
         .collect();
     let batch = call(st, account_id, Method::POST, "/$batch", Some(&json!({ "requests": reqs }))).await?;
     for r in batch["responses"].as_array().cloned().unwrap_or_default() {

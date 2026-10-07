@@ -1,5 +1,5 @@
 // Central application state (Svelte 5 runes, shared module).
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api } from "$lib/api";
 import { applyTheme } from "$lib/theme";
@@ -22,6 +22,7 @@ import {
 } from "$lib/types";
 import { toasts } from "./toasts.svelte";
 import { errMsg } from "$lib/util/misc";
+import { openMessageWindow } from "$lib/util/windows";
 
 export type UiView = MessageView | { kind: "results"; title: string; ids: string[] };
 
@@ -54,6 +55,8 @@ function viewKey(v: UiView): string {
 
 class AppState {
   // ---- boot ----
+  /** "message" in a pop-out window that shows a single message. */
+  windowKind = $state<"main" | "message">("main");
   ready = $state(false);
   bootError = $state<string | null>(null);
 
@@ -98,6 +101,11 @@ class AppState {
 
   aiReady = $derived(this.settings ? hasAi(this.settings) : false);
   hasAccounts = $derived(this.accounts.length > 0);
+  /** Accounts the user signed in to (not shared mailboxes / other people's calendars): "me". */
+  ownAccounts = $derived(this.accounts.filter((a) => !a.ownerId));
+  /** Accounts with mail (everything but calendar-only shares). */
+  mailAccounts = $derived(this.accounts.filter((a) => a.syncMail));
+  readingPane = $derived(this.settings?.ui.readingPane !== "off");
   selectedIndex = $derived(this.messages.findIndex((m) => m.id === this.selectedId));
   accountById = $derived(new Map(this.accounts.map((a) => [a.id, a])));
   mode = $derived<"dark" | "light">(this.theme?.mode === "light" ? "light" : "dark");
@@ -122,7 +130,7 @@ class AppState {
       this.settings = boot.settings;
       setLocale(boot.settings.ui.locale);
       this.theme = boot.theme;
-      applyTheme(boot.theme, boot.settings.ui.translucent);
+      applyTheme(boot.theme, this.themeOpts());
       configureAi(() => this.settings!);
       await this.listenAll();
       if (this.accounts.length) {
@@ -144,11 +152,50 @@ class AppState {
     }
   }
 
+  /** Boot for a pop-out message window: no list, no sync listeners, just the one message. */
+  async initMessageWindow(id: string) {
+    this.windowKind = "message";
+    try {
+      const boot = await api.bootstrap();
+      this.accounts = boot.accounts;
+      this.settings = boot.settings;
+      setLocale(boot.settings.ui.locale);
+      this.theme = boot.theme;
+      applyTheme(boot.theme, this.themeOpts());
+      configureAi(() => this.settings!);
+      this.unlisten.push(
+        await listen<Theme>(EVENTS.themeChanged, (e) => {
+          this.theme = e.payload;
+          applyTheme(e.payload, this.themeOpts());
+        }),
+      );
+      await this.openMessage(id);
+      if (this.open) {
+        this.messages = [this.open];
+        this.selectedId = id;
+      }
+    } catch (e) {
+      this.bootError = errMsg(e);
+    } finally {
+      this.ready = true;
+    }
+  }
+
+  /** From a pop-out window: tell the main window the mail it shows has changed. */
+  private notifyOthers() {
+    if (this.windowKind === "message")
+      emit(EVENTS.mailChanged, { accountId: this.open?.accountId ?? "", folderIds: [], newMessageIds: [] }).catch(() => {});
+  }
+
+  private themeOpts() {
+    return { translucent: this.settings?.ui.translucent ?? false, contrast: this.settings?.ui.contrast ?? "higher" };
+  }
+
   private async listenAll() {
     this.unlisten.push(
       await listen<Theme>(EVENTS.themeChanged, (e) => {
         this.theme = e.payload;
-        applyTheme(e.payload, this.settings?.ui.translucent ?? false);
+        applyTheme(e.payload, this.themeOpts());
       }),
       await listen<SyncStatusEvent>(EVENTS.syncStatus, (e) => {
         this.syncStatus = { ...this.syncStatus, [e.payload.accountId]: e.payload };
@@ -213,7 +260,7 @@ class AppState {
         if (!this.settings?.ai.predraftReplies) today.cancelPredraft();
         else today.schedulePredraft();
       });
-      if (this.theme) applyTheme(this.theme, this.settings.ui.translucent);
+      if (this.theme) applyTheme(this.theme, this.themeOpts());
     } catch (e) {
       toasts.error(`Could not save settings: ${errMsg(e)}`);
       throw e;
@@ -251,12 +298,37 @@ class AppState {
     }
   }
 
+  /** Shared mailbox (mail = true) or someone's shared calendar, opened through one of the user's accounts. */
+  async addSharedAccount(ownerId: string, email: string, mail: boolean): Promise<Account | null> {
+    try {
+      const acct = await api.addSharedAccount(ownerId, email, mail);
+      this.accounts = await api.accounts();
+      this.authProgress = null;
+      toasts.show(`Added ${acct.email} — syncing`, { kind: "success" });
+      return acct;
+    } catch (e) {
+      const msg = errMsg(e);
+      this.authProgress = null;
+      if (!/cancel/i.test(msg)) toasts.show(msg, { kind: "error", timeout: 12000 });
+      return null;
+    }
+  }
+
   async removeAccount(id: string) {
     await api.removeAccount(id);
-    this.accounts = this.accounts.filter((a) => a.id !== id);
-    if (this.accountFilter === id) this.accountFilter = null;
-    this.folders = this.folders.filter((f) => f.accountId !== id);
+    // Removing an account also removes the shared mailboxes opened through it.
+    const gone = new Set([id, ...this.accounts.filter((a) => a.ownerId === id).map((a) => a.id)]);
+    this.accounts = this.accounts.filter((a) => !gone.has(a.id));
+    if (this.accountFilter && gone.has(this.accountFilter)) this.accountFilter = null;
+    this.folders = this.folders.filter((f) => !gone.has(f.accountId));
     await this.reload();
+    import("./calendar.svelte").then(({ calendar }) => calendar.load({ silent: true }));
+  }
+
+  /** Account new mail is sent from by default: the filtered or open message's account if it has mail. */
+  defaultMailAccount(): string {
+    const ok = (id: string | null | undefined) => (id && this.accountById.get(id)?.syncMail ? id : null);
+    return ok(this.accountFilter) ?? ok(this.open?.accountId) ?? this.ownAccounts[0]?.id ?? this.mailAccounts[0]?.id ?? "";
   }
 
   async updateAccount(id: string, patch: { displayName?: string; hue?: number }) {
@@ -403,6 +475,7 @@ class AppState {
 
   /** Background refresh after sync: merge without disturbing selection. */
   scheduleRefresh() {
+    if (this.windowKind === "message") return this.notifyOthers();
     clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(async () => {
       await Promise.all([this.refreshFolders(), this.reload(true)]);
@@ -465,7 +538,43 @@ class AppState {
       this.reload(true).then(() => (this.selectedId = id));
     }
     this.selectedId = id;
-    if (id && openIt) this.openMessage(id);
+    if (id && openIt && this.readingPane) this.openMessage(id);
+  }
+
+  /** Enter / o: into the reading pane, or into its own window when the pane is hidden. */
+  openSelected() {
+    if (!this.selectedId) return;
+    if (this.readingPane) this.openMessage(this.selectedId);
+    else this.openInWindow(this.selectedId);
+  }
+
+  async openInWindow(id = this.selectedId) {
+    if (!id) return;
+    const m = this.messages.find((x) => x.id === id) ?? (this.open?.id === id ? this.open : null);
+    try {
+      await openMessageWindow(id, m?.subject);
+    } catch (e) {
+      toasts.error(`Could not open a window: ${errMsg(e)}`);
+    }
+  }
+
+  async toggleReadingPane() {
+    const off = this.readingPane;
+    await this.patchSettings((s) => (s.ui.readingPane = off ? "off" : "right"));
+    if (off) this.closeReader();
+    else if (this.selectedId) this.openMessage(this.selectedId);
+  }
+
+  /** The message actions apply to: the open one, or the selected one when the reading pane is hidden. */
+  async current(): Promise<MessageFull | null> {
+    if (this.open && (!this.selectedId || this.open.id === this.selectedId || this.windowKind === "message")) return this.open;
+    if (!this.selectedId) return null;
+    try {
+      return await api.message(this.selectedId);
+    } catch (e) {
+      toasts.error(errMsg(e));
+      return null;
+    }
   }
 
   move(delta: number) {
@@ -536,6 +645,7 @@ class AppState {
     }
     try {
       await api.setRead(ids, read);
+      this.notifyOthers();
     } catch (e) {
       this.patchLocal(ids, { isRead: !read });
       if (!silent) toasts.error(errMsg(e));
@@ -554,6 +664,7 @@ class AppState {
     this.patchLocal(ids, { isFlagged: flagged });
     try {
       await api.setFlag(ids, flagged);
+      this.notifyOthers();
     } catch (e) {
       this.patchLocal(ids, { isFlagged: !flagged });
       toasts.error(errMsg(e));
@@ -605,6 +716,7 @@ class AppState {
     const removed = this.view.kind === "snoozed" ? [] : this.removeLocal(ids);
     try {
       await api.snooze(ids, until.toISOString());
+      this.notifyOthers();
       const { weekdayDayMonth, hhmm } = await import("$lib/util/fmt");
       toasts.show(`Snoozed until ${weekdayDayMonth(until)} ${hhmm(until)}`, {
         kind: "success",
@@ -647,6 +759,7 @@ class AppState {
     try {
       if (isDelete) await api.remove(ids);
       else await api.move(ids, destination);
+      this.notifyOthers();
       toasts.show(label ?? "Moved", {
         kind: "success",
         timeout: 6000,

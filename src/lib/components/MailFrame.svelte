@@ -14,7 +14,8 @@
   const allowRemote = $derived(policy === "always" || allowOnce);
 
   const rendered = $derived.by(() => {
-    void app.theme; // re-render on theme change
+    void app.theme; // re-render on theme / contrast change
+    void app.settings?.ui.contrast;
     const cs = getComputedStyle(document.documentElement);
     return renderMail(html, {
       allowRemote,

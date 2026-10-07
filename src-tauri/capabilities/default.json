@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and pop-out message windows",
+  "windows": ["main", "msg-*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -10,6 +10,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-set-focus",
+    "core:window:allow-set-title",
+    "core:webview:allow-create-webview-window",
     "opener:default",
     "opener:allow-open-url",
     {

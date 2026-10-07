@@ -42,6 +42,8 @@
       { id: "triage", label: "Run AI triage on new mail", group: "Actions", run: () => app.runTriage() },
       { id: "unread", label: app.unreadOnly ? "Show all mail" : "Show unread only", group: "Actions", hint: "U", run: () => app.toggleUnreadOnly() },
       { id: "agent", label: "Open Tern agent", group: "Actions", hint: "^J", run: () => app.toggleAgent(true) },
+      { id: "pane", label: app.readingPane ? "Hide reading pane" : "Show reading pane", group: "App", hint: "p", run: () => app.toggleReadingPane() },
+      ...(app.selectedId ? [{ id: "popout", label: "Open message in new window", group: "Message", hint: "O", run: () => app.openInWindow() }] : []),
       { id: "settings", label: "Settings", group: "App", hint: "^,", run: () => app.openSettings() },
       { id: "settings-ai", label: "Settings: AI providers", group: "App", run: () => app.openSettings("ai") },
       { id: "settings-acc", label: "Settings: Add account", group: "App", run: () => app.openSettings("accounts") },

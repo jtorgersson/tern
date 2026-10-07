@@ -43,7 +43,7 @@
   });
 
   function create(c: Chip) {
-    const me = new Set(app.accounts.map((a) => a.email.toLowerCase()));
+    const me = new Set(app.ownAccounts.map((a) => a.email.toLowerCase()));
     const sender = me.has(message.from.email.toLowerCase()) ? [] : [message.from];
     calendar.openComposer({
       accountId: message.accountId,

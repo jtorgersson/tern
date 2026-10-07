@@ -15,8 +15,8 @@
 
   const ws = $derived(app.settings?.calendar.workStart ?? "09:00");
   const we = $derived(app.settings?.calendar.workEnd ?? "17:00");
-  const mine = $derived(app.accounts.map((a) => a.email));
-  const data = $derived(computeInsights(calendar.visible, calendar.anchor, mine, ws, we, INSIGHT_WEEKS));
+  const mine = $derived(app.ownAccounts.map((a) => a.email));
+  const data = $derived(computeInsights(calendar.mine, calendar.anchor, mine, ws, we, INSIGHT_WEEKS));
   const todayKey = $derived(dayKey(calendar.now));
   const loading = $derived(calendar.fetching || (calendar.loading && !calendar.loadedOnce));
   let tableView = $state(false);

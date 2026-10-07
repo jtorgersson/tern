@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS accounts (
   status TEXT NOT NULL DEFAULT 'ok',
   status_message TEXT,
   sort INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  owner_id TEXT,
+  sync_mail INTEGER NOT NULL DEFAULT 1,
+  shared_consent INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -172,6 +175,16 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN meeting_type TEXT")?;
     }
+    for (col, ddl) in [
+        ("owner_id", "TEXT"),
+        ("sync_mail", "INTEGER NOT NULL DEFAULT 1"),
+        ("shared_consent", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('accounts') WHERE name = ?1")?.exists([col])?;
+        if !has {
+            conn.execute_batch(&format!("ALTER TABLE accounts ADD COLUMN {col} {ddl}"))?;
+        }
+    }
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('bodies') WHERE name = 'unsubscribe_json'")?.exists([])?;
     if !has {
         conn.execute_batch("ALTER TABLE bodies ADD COLUMN unsubscribe_json TEXT")?;
@@ -269,6 +282,9 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
     })
 }
 
+const ACCOUNT_COLS: &str =
+    "id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message, owner_id, sync_mail, shared_consent";
+
 fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
     Ok(Account {
         id: r.get(0)?,
@@ -280,6 +296,9 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         last_sync: r.get(6)?,
         status: r.get(7)?,
         status_message: r.get(8)?,
+        owner_id: r.get(9)?,
+        sync_mail: r.get::<_, i64>(10)? != 0,
+        shared_consent: r.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -349,8 +368,7 @@ impl Db {
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message
-             FROM accounts ORDER BY sort, created_at",
+            &format!("SELECT {ACCOUNT_COLS} FROM accounts ORDER BY sort, created_at"),
         )?;
         let rows = st.query_map([], account_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -359,8 +377,7 @@ impl Db {
     pub fn account(&self, id: &str) -> Result<Option<Account>> {
         let c = self.conn();
         Ok(c.query_row(
-            "SELECT id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message
-             FROM accounts WHERE id = ?",
+            &format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE id = ?"),
             [id],
             account_from_row,
         )
@@ -371,12 +388,17 @@ impl Db {
         let c = self.conn();
         let sort: i64 = c.query_row("SELECT COALESCE(MAX(sort), -1) + 1 FROM accounts", [], |r| r.get(0))?;
         c.execute(
-            "INSERT INTO accounts (id, provider, email, display_name, hue, tenant_id, status, sort)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ok', ?7)
+            "INSERT INTO accounts (id, provider, email, display_name, hue, tenant_id, status, sort, owner_id, sync_mail)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ok', ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET email = excluded.email, tenant_id = excluded.tenant_id,
-               status = 'ok', status_message = NULL",
-            params![a.id, a.provider, a.email, a.display_name, a.hue, a.tenant_id, sort],
+               sync_mail = excluded.sync_mail, status = 'ok', status_message = NULL",
+            params![a.id, a.provider, a.email, a.display_name, a.hue, a.tenant_id, sort, a.owner_id, a.sync_mail as i64],
         )?;
+        Ok(())
+    }
+
+    pub fn set_shared_consent(&self, id: &str) -> Result<()> {
+        self.conn().execute("UPDATE accounts SET shared_consent = 1 WHERE id = ?", [id])?;
         Ok(())
     }
 
@@ -404,13 +426,15 @@ impl Db {
         Ok(())
     }
 
+    /// Removes the account and the shared mailboxes / calendars opened through it.
     pub fn remove_account(&self, id: &str) -> Result<()> {
         let c = self.conn();
         c.execute(
-            "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id = ?)",
+            "DELETE FROM messages_fts WHERE rowid IN
+               (SELECT rowid FROM messages WHERE account_id = ?1 OR account_id IN (SELECT id FROM accounts WHERE owner_id = ?1))",
             [id],
         )?;
-        c.execute("DELETE FROM accounts WHERE id = ?", [id])?;
+        c.execute("DELETE FROM accounts WHERE id = ?1 OR owner_id = ?1", [id])?;
         Ok(())
     }
 
@@ -901,7 +925,7 @@ impl Db {
         tx.execute("DELETE FROM calendars WHERE account_id = ?1", [account_id])?;
         {
             let mut st = tx.prepare(
-                "INSERT INTO calendars (id, account_id, name, color, is_default, can_edit, owner, sort) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT OR REPLACE INTO calendars (id, account_id, name, color, is_default, can_edit, owner, sort) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )?;
             for (i, k) in cals.iter().enumerate() {
                 st.execute(params![k.id, account_id, k.name, k.color, k.is_default as i64, k.can_edit as i64, k.owner, i as i64])?;
@@ -1165,6 +1189,9 @@ mod tests {
             last_sync: None,
             status: "ok".into(),
             status_message: None,
+            owner_id: None,
+            sync_mail: true,
+            shared_consent: false,
         })
         .unwrap();
         let f = |id: &str, wk: Option<&str>| Folder {
@@ -1210,6 +1237,34 @@ mod tests {
         assert_eq!(db.event_ids_with_notes().unwrap(), vec!["e1"]);
         db.set_event_note("e1", "  ").unwrap();
         assert!(db.event_note("e1").unwrap().is_none());
+    }
+
+    #[test]
+    fn shared_accounts_follow_their_owner() {
+        let db = mem();
+        seed(&db);
+        let shared = Account {
+            id: "shared-a1-info@emcap.se".into(),
+            provider: "microsoft".into(),
+            email: "info@emcap.se".into(),
+            display_name: "Info".into(),
+            hue: 90,
+            tenant_id: None,
+            last_sync: None,
+            status: "ok".into(),
+            status_message: None,
+            owner_id: Some("a1".into()),
+            sync_mail: false,
+            shared_consent: false,
+        };
+        db.upsert_account(&shared).unwrap();
+        db.set_shared_consent("a1").unwrap();
+        let got = db.account(&shared.id).unwrap().unwrap();
+        assert_eq!(got.owner_id.as_deref(), Some("a1"));
+        assert!(!got.sync_mail);
+        assert!(db.account("a1").unwrap().unwrap().shared_consent);
+        db.remove_account("a1").unwrap();
+        assert!(db.accounts().unwrap().is_empty());
     }
 
     #[test]

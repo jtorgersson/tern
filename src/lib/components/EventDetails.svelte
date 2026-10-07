@@ -68,7 +68,7 @@
     // The popover can close or switch event while the draft streams; work on a snapshot.
     const e0 = ev;
     const text = notes;
-    const me = new Set(app.accounts.map((a) => a.email.toLowerCase()));
+    const me = new Set(app.ownAccounts.map((a) => a.email.toLowerCase()));
     const to = [...(e0.organizer ? [e0.organizer] : []), ...e0.attendees.filter((a) => a.type !== "resource").map((a) => a.addr)].filter(
       (a, i, arr) => !me.has(a.email.toLowerCase()) && arr.findIndex((b) => b.email.toLowerCase() === a.email.toLowerCase()) === i,
     );

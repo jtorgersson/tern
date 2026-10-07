@@ -40,6 +40,10 @@ export const api = {
   accounts: () => invoke<Account[]>("accounts_list"),
   /** Opens the system browser for Microsoft sign-in; resolves when done. Emits auth://progress. */
   addMicrosoftAccount: () => invoke<Account>("account_add_microsoft"),
+  /** Adds a shared mailbox (`mail`) or just someone's shared calendar, opened through `ownerId`.
+   *  The first time it opens the browser to allow the shared-mailbox permissions (emits auth://progress). */
+  addSharedAccount: (ownerId: string, email: string, mail: boolean) =>
+    invoke<Account>("account_add_shared", { ownerId, email, mail }),
   cancelAuth: () => invoke<void>("auth_cancel"),
   removeAccount: (accountId: string) => invoke<void>("account_remove", { accountId }),
   updateAccount: (accountId: string, patch: { displayName?: string; hue?: number }) =>

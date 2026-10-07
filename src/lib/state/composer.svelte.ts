@@ -49,7 +49,7 @@ class Composer {
   bodyVersion = $state(0);
 
   private defaultAccount(): string {
-    return app.accountFilter ?? app.open?.accountId ?? app.accounts[0]?.id ?? "";
+    return app.defaultMailAccount();
   }
 
   compose(partial: Partial<OutgoingMessage> & { ref?: MessageFull | null } = {}) {

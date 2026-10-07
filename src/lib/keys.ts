@@ -12,6 +12,8 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { keys: "j / k", label: "Next / previous message", group: "Navigate" },
   { keys: "Enter / o", label: "Open message", group: "Navigate" },
+  { keys: "O / Shift Enter", label: "Open message in its own window", group: "Navigate" },
+  { keys: "p", label: "Show / hide the reading pane", group: "App" },
   { keys: "g t", label: "Go to Today", group: "Navigate" },
   { keys: "g c", label: "Go to Calendar", group: "Navigate" },
   { keys: "d / w / m / a / i", label: "Calendar: day / week / month / agenda / insights", group: "Navigate" },
@@ -63,7 +65,48 @@ export const readerBus = new EventTarget();
 let pendingG = false;
 let gTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** A pop-out message window: actions on its one message, Esc closes it. */
+function handleMessageWindowKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    if (app.snoozeTarget) app.snoozeTarget = null;
+    else if (composer.open && !composer.minimized && (!isTyping(e) || (e.target as HTMLElement).closest("[data-composer]"))) {
+      (e.target as HTMLElement).blur?.();
+      composer.minimized = true;
+    } else if (isTyping(e)) (e.target as HTMLElement).blur();
+    else import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().close());
+    return;
+  }
+  if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || app.snoozeTarget) return;
+  const m = app.open;
+  if (!m) return;
+  const actions: Record<string, () => void> = {
+    e: () => app.archive([m.id]),
+    "#": () => app.trash([m.id]),
+    Delete: () => app.trash([m.id]),
+    s: () => app.toggleFlag([m.id]),
+    u: () => app.toggleRead([m.id]),
+    z: () => app.openSnooze([m.id]),
+    c: () => composer.compose(),
+    r: () => composer.reply(m, "reply"),
+    R: () => composer.reply(m, "replyAll"),
+    f: () => composer.reply(m, "forward"),
+    t: () => readerBus.dispatchEvent(new Event("summarize")),
+  };
+  const fn = actions[e.key];
+  if (fn) {
+    e.preventDefault();
+    fn();
+  }
+}
+
+/** Reply / forward the open message, or the selected one when the reading pane is hidden. */
+async function replyTo(mode: "reply" | "replyAll" | "forward") {
+  const m = await app.current();
+  if (m) composer.reply(m, mode);
+}
+
 export function handleKey(e: KeyboardEvent) {
+  if (app.windowKind === "message") return handleMessageWindowKey(e);
   const mod = e.ctrlKey || e.metaKey;
 
   // ---- global chords (work while typing) ----
@@ -184,14 +227,15 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
 
-  const sel = app.open;
   const actions: Record<string, () => void> = {
     j: () => app.move(1),
     ArrowDown: () => app.move(1),
     k: () => app.move(-1),
     ArrowUp: () => app.move(-1),
-    Enter: () => app.selectedId && app.openMessage(app.selectedId),
-    o: () => app.selectedId && app.openMessage(app.selectedId),
+    Enter: () => (e.shiftKey ? app.openInWindow() : app.openSelected()),
+    o: () => app.openSelected(),
+    O: () => app.openInWindow(),
+    p: () => app.toggleReadingPane(),
     e: () => app.archive(),
     "#": () => app.trash(),
     Delete: () => app.trash(),
@@ -201,9 +245,9 @@ export function handleKey(e: KeyboardEvent) {
     U: () => app.toggleUnreadOnly(),
     x: () => app.selectedId && app.toggleCheck(app.selectedId),
     c: () => composer.compose(),
-    r: () => sel && composer.reply(sel, "reply"),
-    R: () => sel && composer.reply(sel, "replyAll"),
-    f: () => sel && composer.reply(sel, "forward"),
+    r: () => replyTo("reply"),
+    R: () => replyTo("replyAll"),
+    f: () => replyTo("forward"),
     a: () => app.toggleAgent(true),
     t: () => readerBus.dispatchEvent(new Event("summarize")),
     "/": () => app.searchFocusTick++,

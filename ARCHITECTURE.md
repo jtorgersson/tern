@@ -37,7 +37,15 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 ## Microsoft
 Public-client app registration (no secret). Auth-code + PKCE against
 `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`, redirect `http://localhost:<random port>`.
-Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`.
+Scopes: `offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite`,
+plus `Mail.ReadWrite.Shared Mail.Send.Shared Calendars.ReadWrite.Shared` once the user adds a shared mailbox (`accounts.shared_consent`).
+
+Shared mailboxes and other people's calendars are accounts of their own with `owner_id` = the signed-in account whose
+token opens them (`account_add_shared`; id `shared-<owner>-<address>`). `graph::scoped` rewrites their `/me/...` paths to
+`/users/<address>/...` and `auth::access_token` resolves the owner's token, so sync, sending and calendar code is shared.
+`sync_mail = 0` marks a calendar-only account (only the calendar syncs; a delegate without access to the calendar list
+falls back to `/users/<address>/calendar`). Removing an account removes the shared ones opened through it. Shared calendars
+never trigger reminders, and the UI's "my day" (next up, today, invitations, insights) uses `calendar.mine`, which leaves them out.
 Sync: `/me/mailFolders` + per-folder `messages/delta` (inbox, sent, drafts, archive, deleted, junk), polling every
 `syncIntervalSecs`. Bodies fetched lazily on open, and prefetched in the background after each sync (`sync::prefetch_bodies`, 40 per cycle,
 last 60 days, `settings.prefetchBodies`).
@@ -97,6 +105,12 @@ are data, and every outward or destructive action needs explicit user approval.
 Three panes: sidebar (accounts, unified views, AI categories, folders) · message list · reader.
 Agent panel slides over from the right (`⌘/Ctrl+J` or `a`), command palette `Ctrl+K`.
 Colors come from the live Omarchy theme as CSS variables (`--accent`, `--bg`, …), re-applied on `theme://changed`.
+`settings.ui.contrast` (`theme` | `higher` | `highest`, `applyTheme`) pulls the background towards a neutral near-black (white
+in light themes), lifts `--fg-dim` / `--muted` towards the foreground, firms up `--line` and makes translucent windows more opaque.
+`settings.ui.readingPane: "off"` hides the reader (`p` toggles); Enter then opens the message in its own window.
+Pop-out message windows (`O`, Shift+Enter, double-click, toolbar) are the same SPA booted with `?message=<id>`
+(`util/windows.ts`, label `msg-<hash>`, `app.initMessageWindow`); they emit `mail://changed` after actions so the main
+window refreshes, and close themselves once the message is archived, deleted or snoozed.
 
 Keyboard: `j/k` next/prev · `Enter`/`o` open · `e` archive · `#` delete · `s` star/flag · `u` toggle read ·
 `r` reply · `R`/`a`… see `src/lib/keys.ts` · `c` compose · `/` search · `g i` inbox · `g s` sent ·

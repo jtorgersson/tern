@@ -29,7 +29,10 @@
     LoaderCircle,
     AlarmClock,
     MailX,
+    SquareArrowOutUpRight,
+    X,
   } from "@lucide/svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { parseMailto } from "$lib/util/mailto";
 
   // ---- unsubscribe ----
@@ -125,7 +128,7 @@
 
 <section class="reader">
   {#if m}
-    <div class="toolbar">
+    <div class="toolbar" data-tauri-drag-region>
       <div class="group">
         <button class="icon-btn" title="Archive (e)" onclick={() => app.archive([m.id])}><Archive size={16} /></button>
         <button class="icon-btn" title="Delete (#)" onclick={() => app.trash([m.id])}><Trash2 size={16} /></button>
@@ -145,6 +148,11 @@
         <button class="icon-btn" title="Forward (f)" onclick={() => composer.reply(m, "forward")}><Forward size={16} /></button>
         {#if m.webLink}
           <button class="icon-btn" title="Open in Outlook on the web" onclick={() => openUrl(m.webLink!)}><ExternalLink size={16} /></button>
+        {/if}
+        {#if app.windowKind === "main"}
+          <button class="icon-btn" title="Open in new window (O)" onclick={() => app.openInWindow(m.id)}><SquareArrowOutUpRight size={16} /></button>
+        {:else}
+          <button class="icon-btn" title="Close window (Esc)" onclick={() => getCurrentWindow().close()}><X size={16} /></button>
         {/if}
       </div>
     </div>

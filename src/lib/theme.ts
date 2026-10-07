@@ -1,5 +1,5 @@
 // Maps the live Omarchy theme (colors.toml) onto CSS custom properties.
-import type { Theme } from "./types";
+import type { Contrast, Theme } from "./types";
 
 const FALLBACK_DARK: Record<string, string> = {
   background: "#1a1b26",
@@ -72,31 +72,63 @@ export function onColor(bg: string, dark = "#10141a", light = "#ffffff"): string
   return luminance(bg) > 0.45 ? dark : light;
 }
 
-let lastTheme: Theme | null = null;
-let lastTranslucent = false;
+function toHex([r, g, b]: number[]): string {
+  return "#" + [r, g, b].map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+}
 
-export function applyTheme(theme: Theme, translucent = lastTranslucent) {
+/** `a` weighted `t` (0..1) against `b`, in sRGB. */
+export function mixHex(a: string, b: string, t: number): string {
+  const x = hexToRgb(a);
+  const y = hexToRgb(b);
+  return toHex(x.map((v, i) => v * t + y[i] * (1 - t)));
+}
+
+/** Per contrast level: how much of the theme background survives the pull towards near-black (or white),
+ *  how much of the secondary text colours survives the pull towards the foreground, and window opacity. */
+const CONTRAST: Record<Contrast, { bg: number; fg: number; dim: number; muted: number; surface: number; panel: number }> = {
+  theme: { bg: 1, fg: 1, dim: 1, muted: 1, surface: 0.9, panel: 0.84 },
+  higher: { bg: 0.62, fg: 0.7, dim: 0.45, muted: 0.6, surface: 0.95, panel: 0.92 },
+  highest: { bg: 0.35, fg: 0.4, dim: 0.2, muted: 0.4, surface: 1, panel: 0.98 },
+};
+
+let lastTheme: Theme | null = null;
+let lastOpts: { translucent: boolean; contrast: Contrast } = { translucent: false, contrast: "theme" };
+
+export function applyTheme(theme: Theme, opts: Partial<typeof lastOpts> = {}) {
   lastTheme = theme;
-  lastTranslucent = translucent;
+  lastOpts = { ...lastOpts, ...opts };
+  const { translucent, contrast } = lastOpts;
+  const k = CONTRAST[contrast] ?? CONTRAST.theme;
+  const boosted = contrast !== "theme";
   const c = theme.colors ?? {};
   const isLight = theme.mode === "light" || (c.background ? luminance(c.background) > 0.5 : false);
   const fb = isLight ? FALLBACK_LIGHT : FALLBACK_DARK;
 
-  const bg = pick(c, "background", fb);
-  const fg = pick(c, "foreground", fb);
+  // Neutral ends the background and the text are pushed towards.
+  const deep = isLight ? "#ffffff" : "#090b0e";
+  const ink = isLight ? "#000000" : "#ffffff";
+  const themeBg = pick(c, "background", fb);
+  const themeFg = pick(c, "foreground", fb);
+  const bg = boosted ? mixHex(themeBg, deep, k.bg) : themeBg;
+  const fg = boosted ? mixHex(themeFg, ink, k.fg) : themeFg;
   const accent = pick(c, "accent", fb);
   const mix = (a: string, b: string, pct: number) => `color-mix(in oklab, ${a} ${pct}%, ${b})`;
+  // A boosted background is derived, so the theme's own darker / lighter shades no longer match it.
+  const shade = (key: string, fallback: string) => (boosted ? fallback : (c[key] ?? fallback));
+  const bgDark = shade("dark_background", mixHex(bg, isLight ? "#ffffff" : "#000000", 0.88));
+  const fgDim = c.dark_foreground ?? mixHex(themeFg, themeBg, 0.72);
+  const muted = pick(c, "muted", fb);
 
   const vars: Record<string, string> = {
     "--bg": bg,
     "--bg-rgb": hexToRgb(bg).join(", "),
-    "--bg-dark": c.dark_background ?? mix(bg, isLight ? "#ffffff" : "#000000", 88),
-    "--bg-darker": c.darker_background ?? mix(bg, isLight ? "#ffffff" : "#000000", 76),
-    "--bg-lighter": c.lighter_background ?? mix(bg, fg, 92),
+    "--bg-dark": bgDark,
+    "--bg-darker": shade("darker_background", mixHex(bg, isLight ? "#ffffff" : "#000000", 0.76)),
+    "--bg-lighter": shade("lighter_background", mix(bg, fg, 92)),
     "--fg": fg,
-    "--fg-dim": c.dark_foreground ?? mix(fg, bg, 72),
-    "--fg-bright": c.bright_foreground ?? fg,
-    "--muted": pick(c, "muted", fb),
+    "--fg-dim": boosted ? mixHex(fgDim, fg, k.dim) : fgDim,
+    "--fg-bright": boosted ? ink : (c.bright_foreground ?? fg),
+    "--muted": boosted ? mixHex(muted, fg, k.muted) : muted,
     "--accent": accent,
     "--accent-rgb": hexToRgb(accent).join(", "),
     "--on-accent": onColor(accent),
@@ -108,23 +140,22 @@ export function applyTheme(theme: Theme, translucent = lastTranslucent) {
     "--magenta": pick(c, "magenta", fb),
     "--cyan": pick(c, "cyan", fb),
     "--orange": c.orange ?? pick(c, "yellow", fb),
-    "--surface": translucent ? `rgba(${hexToRgb(bg).join(", ")}, 0.9)` : bg,
-    "--panel": translucent
-      ? `rgba(${hexToRgb(c.dark_background ?? bg).join(", ")}, 0.84)`
-      : (c.dark_background ?? mix(bg, isLight ? "#ffffff" : "#000000", 88)),
+    "--surface": translucent ? `rgba(${hexToRgb(bg).join(", ")}, ${k.surface})` : bg,
+    "--panel": translucent ? `rgba(${hexToRgb(bgDark).join(", ")}, ${k.panel})` : bgDark,
   };
 
   const root = document.documentElement;
-  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  for (const [key, v] of Object.entries(vars)) root.style.setProperty(key, v);
   root.dataset.mode = isLight ? "light" : "dark";
   root.dataset.translucent = translucent ? "true" : "false";
+  root.dataset.contrast = contrast;
   root.style.colorScheme = isLight ? "light" : "dark";
   if (theme.fontFamily) root.style.setProperty("--font-ui-system", `"${theme.fontFamily}"`);
   if (theme.monoFamily) root.style.setProperty("--font-mono-system", `"${theme.monoFamily}"`);
 }
 
 export function setTranslucent(on: boolean) {
-  if (lastTheme) applyTheme(lastTheme, on);
+  if (lastTheme) applyTheme(lastTheme, { translucent: on });
 }
 
 /** Account hue → color that harmonizes with the theme. */

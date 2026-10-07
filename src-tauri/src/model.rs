@@ -14,6 +14,12 @@ pub struct Account {
     pub last_sync: Option<String>,
     pub status: String,
     pub status_message: Option<String>,
+    /// Set for a shared mailbox / someone else's calendar: the signed-in account whose token opens it.
+    pub owner_id: Option<String>,
+    /// False for calendar-only (someone's shared calendar without mailbox access).
+    pub sync_mail: bool,
+    /// The user granted the `.Shared` Graph scopes (needed to open other mailboxes).
+    pub shared_consent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

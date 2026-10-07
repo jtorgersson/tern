@@ -14,6 +14,13 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 pub const SCOPES: &str = "offline_access openid profile email User.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.ReadWrite";
+/// Asked for only once the user adds a shared mailbox or calendar, so tenants that need admin approval
+/// for these never block a normal sign-in.
+pub const SHARED_SCOPES: &str = "Mail.ReadWrite.Shared Mail.Send.Shared Calendars.ReadWrite.Shared";
+
+fn scopes(shared: bool) -> String {
+    if shared { format!("{SCOPES} {SHARED_SCOPES}") } else { SCOPES.to_string() }
+}
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -100,11 +107,15 @@ async fn wait_for_code(listener: TcpListener) -> Result<(String, String)> {
     }
 }
 
-/// Interactive sign-in in the system browser.
+/// Interactive sign-in in the system browser. `shared` also asks for the shared-mailbox scopes;
+/// `login_hint` preselects the account (used when re-consenting an existing one).
+#[allow(clippy::too_many_arguments)]
 pub async fn interactive(
     http: &reqwest::Client,
     client_id: &str,
     tenant: &str,
+    shared: bool,
+    login_hint: Option<&str>,
     cancel: oneshot::Receiver<()>,
     on_waiting: impl FnOnce(),
     on_exchanging: impl FnOnce(),
@@ -118,6 +129,7 @@ pub async fn interactive(
     let verifier = random_b64(48);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_b64(16);
+    let scope = scopes(shared);
 
     let mut auth = url::Url::parse(&format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"))?;
     auth.query_pairs_mut()
@@ -125,11 +137,14 @@ pub async fn interactive(
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &redirect)
         .append_pair("response_mode", "query")
-        .append_pair("scope", SCOPES)
+        .append_pair("scope", &scope)
         .append_pair("state", &state)
         .append_pair("code_challenge", &challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("prompt", "select_account");
+        .append_pair("code_challenge_method", "S256");
+    match login_hint {
+        Some(h) => auth.query_pairs_mut().append_pair("login_hint", h),
+        None => auth.query_pairs_mut().append_pair("prompt", "select_account"),
+    };
 
     tauri_plugin_opener::open_url(auth.as_str(), None::<&str>).context("could not open the browser")?;
     on_waiting();
@@ -152,7 +167,7 @@ pub async fn interactive(
             ("code", &code),
             ("redirect_uri", &redirect),
             ("code_verifier", &verifier),
-            ("scope", SCOPES),
+            ("scope", &scope),
         ])
         .send()
         .await?;
@@ -185,8 +200,14 @@ pub fn refresh_key(account_id: &str) -> String {
     format!("ms:{account_id}")
 }
 
+/// The signed-in account whose tokens open `account_id` (itself, or the owner of a shared mailbox).
+pub fn token_account(st: &AppState, account_id: &str) -> String {
+    st.db.account(account_id).ok().flatten().and_then(|a| a.owner_id).unwrap_or_else(|| account_id.to_string())
+}
+
 /// Returns a valid access token for the account, refreshing (and rotating the refresh token) as needed.
 pub async fn access_token(st: &AppState, account_id: &str) -> Result<String> {
+    let account_id = &token_account(st, account_id);
     if let Some((tok, exp)) = st.tokens.lock().unwrap().get(account_id).cloned() {
         if exp > Instant::now() + Duration::from_secs(120) {
             return Ok(tok);
@@ -199,7 +220,10 @@ pub async fn access_token(st: &AppState, account_id: &str) -> Result<String> {
             return Ok(tok);
         }
     }
-    let email = st.db.account(account_id)?.map(|a| a.email).unwrap_or_else(|| account_id.to_string());
+    let acc = st.db.account(account_id)?;
+    let shared = acc.as_ref().is_some_and(|a| a.shared_consent);
+    let email = acc.map(|a| a.email).unwrap_or_else(|| account_id.to_string());
+    let scope = scopes(shared);
     let refresh = secrets::get(&refresh_key(account_id))?.ok_or_else(|| AuthError::Reauth(email.clone()))?;
     let settings = st.settings.read().unwrap().clone();
     let client_id = crate::settings::ms_client_id(&settings);
@@ -211,7 +235,7 @@ pub async fn access_token(st: &AppState, account_id: &str) -> Result<String> {
             ("client_id", client_id.as_str()),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh.as_str()),
-            ("scope", SCOPES),
+            ("scope", scope.as_str()),
         ])
         .send()
         .await?;

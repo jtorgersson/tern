@@ -55,6 +55,20 @@
   --shadow-sm: 0 6px 18px -8px rgb(20 30 40 / 0.2), 0 0 0 1px var(--line);
 }
 
+:root[data-contrast="higher"] {
+  --line: color-mix(in oklab, var(--fg) 13%, transparent);
+  --line-strong: color-mix(in oklab, var(--fg) 22%, transparent);
+  --hover: color-mix(in oklab, var(--fg) 7%, transparent);
+  --active: color-mix(in oklab, var(--accent) 19%, transparent);
+}
+
+:root[data-contrast="highest"] {
+  --line: color-mix(in oklab, var(--fg) 18%, transparent);
+  --line-strong: color-mix(in oklab, var(--fg) 30%, transparent);
+  --hover: color-mix(in oklab, var(--fg) 9%, transparent);
+  --active: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
 :root[data-density="compact"] {
   --row-h: 52px;
   --pad: 10px;

@@ -54,6 +54,7 @@ pub fn run() {
             commands::secret_get,
             commands::accounts_list,
             commands::account_add_microsoft,
+            commands::account_add_shared,
             commands::auth_cancel,
             commands::account_remove,
             commands::account_update,

@@ -7,7 +7,7 @@
   import { hueColor } from "$lib/theme";
   import { relative } from "$lib/util/time";
   import { errMsg } from "$lib/util/misc";
-  import type { AiProvider } from "$lib/types";
+  import type { Account, AiProvider } from "$lib/types";
   import ProviderEditor from "./ProviderEditor.svelte";
   import { X, Users, Sparkles, Palette, PenLine, RefreshCw, Plus, Trash2, Pencil, LoaderCircle, Check, CalendarDays } from "@lucide/svelte";
 
@@ -73,7 +73,70 @@
   }
 
   const HUES = [-1, 28, 95, 150, 190, 220, 265, 310, 345];
+
+  // ---- shared mailboxes / calendars ----
+  /** Personal Microsoft accounts (Outlook.com) can't open other mailboxes through Graph. */
+  const MSA_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+  let sharedFor = $state<string | null>(null);
+  let sharedEmail = $state("");
+  let sharedMail = $state(true);
+  let sharedBusy = $state(false);
+  async function addShared(ownerId: string) {
+    sharedBusy = true;
+    const added = await app.addSharedAccount(ownerId, sharedEmail, sharedMail);
+    sharedBusy = false;
+    if (added) sharedFor = null;
+  }
 </script>
+
+{#snippet accountRow(a: Account)}
+  {@const raw = app.syncStatus[a.id]?.state ?? a.status}
+  {@const st = raw === "idle" ? "ok" : raw}
+  {@const msg = app.syncStatus[a.id]?.message ?? a.statusMessage}
+  <div class="acct" class:child={!!a.ownerId}>
+    <span class="dot" style:background={hueColor(a.hue, app.mode)}></span>
+    <div class="info">
+      {#if renaming === a.id}
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            app.updateAccount(a.id, { displayName: renameText.trim() });
+            renaming = null;
+          }}>
+          <input class="field" bind:value={renameText} placeholder="Display name" />
+        </form>
+      {:else}
+        <div class="an">
+          {a.displayName || a.email}
+          {#if a.ownerId}<span class="kind">{a.syncMail ? "Shared mailbox" : "Calendar only"}</span>{/if}
+        </div>
+      {/if}
+      <div class="ae">{a.email} · <span class="st {st}">{st === "ok" ? `synced ${relative(app.syncStatus[a.id]?.lastSync ?? a.lastSync)}` : st}</span></div>
+      {#if st === "error" && msg}<div class="hint err">{msg}</div>{/if}
+      <div class="hues">
+        {#each HUES as h}
+          <button
+            class="hue"
+            class:on={a.hue === h}
+            style:background={hueColor(h, app.mode)}
+            aria-label="Color"
+            onclick={() => app.updateAccount(a.id, { hue: h })}></button>
+        {/each}
+      </div>
+    </div>
+    {#if st === "reauth" && !a.ownerId}
+      <button class="btn sm primary" onclick={addAccount}>Sign in again</button>
+    {/if}
+    <button class="icon-btn" title="Rename" onclick={() => { renaming = a.id; renameText = a.displayName; }}><Pencil size={14} /></button>
+    {#if confirmRemove === a.id}
+      <button class="btn sm danger" onclick={() => { app.removeAccount(a.id); confirmRemove = null; }}>
+        {!a.ownerId && app.accounts.some((x) => x.ownerId === a.id) ? "Remove with its shared mailboxes?" : "Remove?"}
+      </button>
+    {:else}
+      <button class="icon-btn" title="Remove" onclick={() => (confirmRemove = a.id)}><Trash2 size={14} /></button>
+    {/if}
+  </div>
+{/snippet}
 
 {#if app.settingsOpen && s}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -95,46 +158,41 @@
         {#if app.settingsSection === "accounts"}
           <h2>Accounts</h2>
           <div class="list">
-            {#each app.accounts as a (a.id)}
-              {@const raw = app.syncStatus[a.id]?.state ?? a.status}
-              {@const st = raw === "idle" ? "ok" : raw}
-              <div class="acct">
-                <span class="dot" style:background={hueColor(a.hue, app.mode)}></span>
-                <div class="info">
-                  {#if renaming === a.id}
-                    <form
-                      onsubmit={(e) => {
-                        e.preventDefault();
-                        app.updateAccount(a.id, { displayName: renameText.trim() });
-                        renaming = null;
-                      }}>
-                      <input class="field" bind:value={renameText} placeholder="Display name" />
-                    </form>
-                  {:else}
-                    <div class="an">{a.displayName || a.email}</div>
-                  {/if}
-                  <div class="ae">{a.email} · <span class="st {st}">{st === "ok" ? `synced ${relative(app.syncStatus[a.id]?.lastSync ?? a.lastSync)}` : st}</span></div>
-                  <div class="hues">
-                    {#each HUES as h}
-                      <button
-                        class="hue"
-                        class:on={a.hue === h}
-                        style:background={hueColor(h, app.mode)}
-                        aria-label="Color"
-                        onclick={() => app.updateAccount(a.id, { hue: h })}></button>
-                    {/each}
-                  </div>
-                </div>
-                {#if st === "reauth"}
-                  <button class="btn sm primary" onclick={addAccount}>Sign in again</button>
-                {/if}
-                <button class="icon-btn" title="Rename" onclick={() => { renaming = a.id; renameText = a.displayName; }}><Pencil size={14} /></button>
-                {#if confirmRemove === a.id}
-                  <button class="btn sm danger" onclick={() => { app.removeAccount(a.id); confirmRemove = null; }}>Remove?</button>
+            {#each app.ownAccounts as a (a.id)}
+              {@render accountRow(a)}
+              {#each app.accounts.filter((x) => x.ownerId === a.id) as sh (sh.id)}
+                {@render accountRow(sh)}
+              {/each}
+              {#if a.provider === "microsoft" && a.tenantId !== MSA_TENANT}
+                {#if sharedFor === a.id}
+                  <form class="shared-form" onsubmit={(e) => { e.preventDefault(); addShared(a.id); }}>
+                    <input class="field" type="email" bind:value={sharedEmail} placeholder="info@company.com or a colleague's address" spellcheck="false" disabled={sharedBusy} />
+                    <div class="seg">
+                      <button type="button" class:on={sharedMail} onclick={() => (sharedMail = true)} disabled={sharedBusy}>Mailbox &amp; calendar</button>
+                      <button type="button" class:on={!sharedMail} onclick={() => (sharedMail = false)} disabled={sharedBusy}>Calendar only</button>
+                    </div>
+                    <span class="grow"></span>
+                    {#if sharedBusy && app.authProgress?.state === "waiting_browser"}
+                      <button type="button" class="btn ghost sm" onclick={() => api.cancelAuth()}>Cancel</button>
+                    {:else if !sharedBusy}
+                      <button type="button" class="btn ghost sm" onclick={() => (sharedFor = null)}>Cancel</button>
+                    {/if}
+                    <button class="btn sm primary" type="submit" disabled={sharedBusy || !sharedEmail.trim()}>
+                      {#if sharedBusy}<LoaderCircle size={13} class="spin" />{app.authProgress?.state === "waiting_browser" ? "Allow in browser…" : "Adding…"}{:else}Add{/if}
+                    </button>
+                    <p class="hint">
+                      {sharedMail
+                        ? "A shared mailbox you have Full Access to. Sending from it needs Send As."
+                        : "Someone's calendar that is shared with you."}
+                      {#if !a.sharedConsent} The first time, your browser asks you to allow Tern to open shared mailboxes and calendars.{/if}
+                    </p>
+                  </form>
                 {:else}
-                  <button class="icon-btn" title="Remove account" onclick={() => (confirmRemove = a.id)}><Trash2 size={14} /></button>
+                  <button class="add-shared" onclick={() => { sharedFor = a.id; sharedEmail = ""; sharedMail = true; }}>
+                    <Plus size={13} /> Add shared mailbox or calendar{app.ownAccounts.length > 1 ? ` to ${a.email}` : ""}
+                  </button>
                 {/if}
-              </div>
+              {/if}
             {/each}
           </div>
 
@@ -316,6 +374,21 @@
           <h2>Appearance</h2>
           <p class="lead">Colors follow your Omarchy theme{app.theme ? ` (${app.theme.name})` : ""} and update live when you switch.</p>
           <div class="opt-row">
+            <div><b>Contrast</b><span class="hint">Higher deepens the background and brightens secondary text</span></div>
+            <div class="seg">
+              <button class:on={s.ui.contrast === "theme"} onclick={() => setUi("contrast", "theme")}>Theme</button>
+              <button class:on={(s.ui.contrast ?? "higher") === "higher"} onclick={() => setUi("contrast", "higher")}>Higher</button>
+              <button class:on={s.ui.contrast === "highest"} onclick={() => setUi("contrast", "highest")}>Highest</button>
+            </div>
+          </div>
+          <div class="opt-row">
+            <div><b>Reading pane</b><span class="hint">Hidden: the list uses the full width and messages open in their own window (p toggles)</span></div>
+            <div class="seg">
+              <button class:on={s.ui.readingPane !== "off"} onclick={() => app.readingPane || app.toggleReadingPane()}>Right</button>
+              <button class:on={s.ui.readingPane === "off"} onclick={() => app.readingPane && app.toggleReadingPane()}>Hidden</button>
+            </div>
+          </div>
+          <div class="opt-row">
             <div><b>Density</b><span class="hint">How much fits in the message list</span></div>
             <div class="seg">
               <button class:on={s.ui.density === "comfortable"} onclick={() => setUi("density", "comfortable")}>Comfortable</button>
@@ -354,7 +427,7 @@
         {:else if app.settingsSection === "signatures"}
           <h2>Signatures</h2>
           <p class="lead">Appended to new messages and replies. HTML allowed.</p>
-          {#each app.accounts as a (a.id)}
+          {#each app.mailAccounts as a (a.id)}
             <label class="block">
               <span class="label"><span class="dot inline" style:background={hueColor(a.hue, app.mode)}></span> {a.email}</span>
               <textarea
@@ -543,6 +616,55 @@
   .st.error,
   .st.reauth {
     color: var(--red);
+  }
+  .acct.child {
+    margin-left: 26px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+  .kind {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: 99px;
+    color: var(--fg-dim);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .add-shared {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    margin: -2px 0 6px 26px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    color: var(--accent);
+  }
+  .add-shared:hover {
+    background: var(--accent-soft);
+  }
+  .shared-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px 26px;
+    padding: 12px;
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+  }
+  .shared-form .field {
+    flex: 1 1 100%;
+    height: 32px;
+  }
+  .shared-form .grow {
+    flex: 1;
+  }
+  .shared-form .hint {
+    flex-basis: 100%;
+    margin: 0;
   }
   .hues {
     display: flex;

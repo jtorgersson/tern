@@ -44,15 +44,25 @@ fn emit_status(app: &AppHandle, st: &AppState, account_id: &str, state: &str, me
 
 pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account, include_other_folders: bool) {
     emit_status(app, st, &acc.id, "syncing", None);
-    match sync_inner(app, st, acc, include_other_folders).await {
+    // A calendar-only account (someone's shared calendar) has nothing else to sync.
+    let result = if acc.sync_mail {
+        sync_inner(app, st, acc, include_other_folders).await
+    } else {
+        crate::calendar::sync_account(app, st, acc).await
+    };
+    match result {
         Ok(()) => {
             // Calendar problems (e.g. a mailbox without one) must not mark mail sync as failed.
-            if let Err(e) = crate::calendar::sync_account(app, st, acc).await {
-                log::warn!("calendar sync failed for {}: {e:#}", acc.email);
+            if acc.sync_mail {
+                if let Err(e) = crate::calendar::sync_account(app, st, acc).await {
+                    log::warn!("calendar sync failed for {}: {e:#}", acc.email);
+                }
             }
             let _ = st.db.set_account_status(&acc.id, "ok", None, true);
             emit_status(app, st, &acc.id, "idle", None);
-            prefetch_bodies(st, acc).await;
+            if acc.sync_mail {
+                prefetch_bodies(st, acc).await;
+            }
         }
         Err(e) => {
             let reauth = e.downcast_ref::<AuthError>().is_some();

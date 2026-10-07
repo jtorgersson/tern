@@ -200,21 +200,24 @@ class CalendarState {
   visible = $derived(
     this.events.filter((e) => (!app.accountFilter || e.accountId === app.accountFilter) && !this.hidden.has(e.calendarId)),
   );
+  /** The user's own day: visible events minus shared mailboxes' and colleagues' calendars
+   *  (unless the user filtered to one of those). Drives next-up, today, invitations and reminders-like UI. */
+  mine = $derived(app.accountFilter ? this.visible : this.visible.filter((e) => !app.accountById.get(e.accountId)?.ownerId));
   /** Visible events intersecting the current period, sorted. */
   inPeriod = $derived.by(() => {
     const s = toLocalIso(this.period.from);
     const e = toLocalIso(this.period.to);
     return sortEvents(this.visible.filter((ev) => ev.start < e && ev.end > s));
   });
-  todayEvents = $derived(eventsOnDay(this.visible, this.now));
-  tomorrowEvents = $derived(eventsOnDay(this.visible, addDays(startOfDay(this.now), 1)));
+  todayEvents = $derived(eventsOnDay(this.mine, this.now));
+  tomorrowEvents = $derived(eventsOnDay(this.mine, addDays(startOfDay(this.now), 1)));
   /** Timed meetings today that still count (not declined/cancelled). */
   todayMeetings = $derived(this.todayEvents.filter((e) => !e.isAllDay && isBusy(e)));
   nextUp = $derived.by(() => {
     const t = toLocalIso(this.now);
     return this.todayEvents.find((e) => !e.isAllDay && isBusy(e) && e.end > t) ?? null;
   });
-  unanswered = $derived(this.visible.filter((e) => e.response === "notResponded" && !e.isCancelled && e.end > toLocalIso(this.now)));
+  unanswered = $derived(this.mine.filter((e) => e.response === "notResponded" && !e.isCancelled && e.end > toLocalIso(this.now)));
   selected = $derived(this.events.find((e) => e.id === this.selectedId) ?? null);
   details = $derived(this.events.find((e) => e.id === this.detailsId) ?? null);
   isTodayVisible = $derived(this.period.from <= this.now && this.now < this.period.to);
@@ -600,7 +603,7 @@ class CalendarState {
 
   /** Blocks a free gap as private focus time (one click from the agenda / rail). */
   async createFocusBlock(start: string, end: string, accountId?: string | null) {
-    const acct = accountId ?? app.accountFilter ?? app.accounts[0]?.id;
+    const acct = accountId ?? app.accountFilter ?? app.ownAccounts[0]?.id;
     if (!acct) return;
     const cal = this.writableCalendars(acct).find((c) => c.isDefault);
     try {
@@ -625,7 +628,7 @@ class CalendarState {
 
   /** Composes an email listing free slots for the coming workdays (for scheduling by mail). */
   async shareAvailability(days = 5, durationMins = 30) {
-    const acct = app.accountFilter ?? app.accounts[0]?.id;
+    const acct = app.accountFilter ?? app.ownAccounts[0]?.id;
     if (!acct) return;
     const s = this.settings;
     try {

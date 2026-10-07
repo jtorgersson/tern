@@ -2,7 +2,7 @@
   import { app } from "$lib/state/app.svelte";
   import { dateGroup } from "$lib/util/time";
   import MessageRow from "./MessageRow.svelte";
-  import { Archive, Trash2, MailOpen, Star, X, Filter, LoaderCircle, Sparkles, Inbox } from "@lucide/svelte";
+  import { Archive, Trash2, MailOpen, Star, X, Filter, LoaderCircle, Sparkles, Inbox, PanelRightClose, PanelRightOpen } from "@lucide/svelte";
   import { tick } from "svelte";
 
   let scroller: HTMLDivElement | undefined = $state();
@@ -90,6 +90,12 @@
         {#if app.loading}<LoaderCircle size={14} class="spin muted" />{/if}
         <button class="icon-btn" class:on={app.unreadOnly} title="Unread only (U)" onclick={() => app.toggleUnreadOnly()}>
           <Filter size={14} />
+        </button>
+        <button
+          class="icon-btn"
+          title={app.readingPane ? "Hide reading pane — open messages in their own window (p)" : "Show reading pane (p)"}
+          onclick={() => app.toggleReadingPane()}>
+          {#if app.readingPane}<PanelRightClose size={14} />{:else}<PanelRightOpen size={14} />{/if}
         </button>
       </div>
     {/if}

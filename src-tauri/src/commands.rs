@@ -100,6 +100,8 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             &st.http,
             &client_id,
             &tenant,
+            false,
+            None,
             rx,
             || progress(&app, "waiting_browser", None),
             || progress(&app, "exchanging", None),
@@ -120,6 +122,9 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             last_sync: None,
             status: "ok".into(),
             status_message: None,
+            owner_id: None,
+            sync_mail: true,
+            shared_consent: existing.as_ref().is_some_and(|a| a.shared_consent),
         };
         secrets::set(&auth::refresh_key(&id), &sign_in.refresh_token)?;
         auth::cache_token(&st, &id, &sign_in.access_token);
@@ -141,6 +146,121 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             Err(msg)
         }
     }
+}
+
+fn valid_mailbox(email: &str) -> bool {
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else { return false };
+    !local.is_empty()
+        && domain.contains('.')
+        && email.chars().all(|c| c.is_ascii_alphanumeric() || "@._+-'".contains(c))
+}
+
+/// Opens a shared mailbox (`mail`) or just someone's shared calendar through a signed-in account.
+/// The first time, the browser asks the owner to allow the `.Shared` scopes.
+#[tauri::command]
+pub async fn account_add_shared(app: AppHandle, st: St<'_>, owner_id: String, email: String, mail: bool) -> R<Account> {
+    let email = email.trim().to_lowercase();
+    if !valid_mailbox(&email) {
+        return Err("Enter the mailbox's email address, e.g. info@example.com".into());
+    }
+    let owner = st
+        .db
+        .account(&owner_id)
+        .map_err(err)?
+        .filter(|a| a.owner_id.is_none() && a.provider == "microsoft")
+        .ok_or("Pick one of your own Microsoft accounts")?;
+    if owner.email.eq_ignore_ascii_case(&email) {
+        return Err("That is your own mailbox".into());
+    }
+    let id = format!("shared-{}-{email}", owner.id);
+
+    if !owner.shared_consent {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(prev) = st.auth_cancel.lock().unwrap().replace(tx) {
+            let _ = prev.send(());
+        }
+        let s = st.settings.read().unwrap().clone();
+        let consent = async {
+            let sign_in = auth::interactive(
+                &st.http,
+                &settings::ms_client_id(&s),
+                &settings::ms_tenant(&s),
+                true,
+                Some(&owner.email),
+                rx,
+                || progress(&app, "waiting_browser", None),
+                || progress(&app, "exchanging", None),
+            )
+            .await?;
+            let (uid, signed_in_as, _) = graph::me(&st.http, &sign_in.access_token).await?;
+            if format!("ms-{uid}") != owner.id {
+                anyhow::bail!("You signed in as {signed_in_as} — sign in as {} to add mailboxes to that account", owner.email);
+            }
+            secrets::set(&auth::refresh_key(&owner.id), &sign_in.refresh_token)?;
+            auth::cache_token(&st, &owner.id, &sign_in.access_token);
+            st.db.set_shared_consent(&owner.id)?;
+            anyhow::Ok(())
+        }
+        .await;
+        st.auth_cancel.lock().unwrap().take();
+        if let Err(e) = consent {
+            let msg = format!("{e:#}");
+            progress(&app, "error", Some(msg.clone()));
+            return Err(msg);
+        }
+        progress(&app, "done", None);
+    }
+
+    let n = st.db.accounts().map_err(err)?.len() as i64;
+    let existing = st.db.account(&id).map_err(err)?;
+    let mut account = Account {
+        id: id.clone(),
+        provider: "microsoft".into(),
+        email: email.clone(),
+        display_name: existing.as_ref().map(|a| a.display_name.clone()).unwrap_or_default(),
+        hue: existing.as_ref().map(|a| a.hue).unwrap_or((n * 137 + 210) % 360),
+        tenant_id: owner.tenant_id.clone(),
+        last_sync: None,
+        status: "ok".into(),
+        status_message: None,
+        owner_id: Some(owner.id.clone()),
+        sync_mail: mail,
+        shared_consent: false,
+    };
+    st.db.upsert_account(&account).map_err(err)?;
+    match graph::probe(&st, &id, mail).await {
+        Ok(name) => {
+            if account.display_name.is_empty() {
+                account.display_name = name.unwrap_or_else(|| email.split('@').next().unwrap_or(&email).to_string());
+                st.db.update_account(&id, Some(&account.display_name), None).map_err(err)?;
+            }
+        }
+        Err(e) => {
+            if existing.is_none() {
+                let _ = st.db.remove_account(&id);
+            }
+            let what = if mail { "mailbox" } else { "calendar" };
+            return Err(match e.downcast_ref::<graph::GraphError>() {
+                Some(g) if g.status == 403 || g.code.contains("AccessDenied") => format!(
+                    "{} has no access to the {what} {email}. {}",
+                    owner.email,
+                    if mail {
+                        "An Exchange admin needs to give you Full Access to it (and Send As to send from it)."
+                    } else {
+                        "Ask its owner to share the calendar with you."
+                    }
+                ),
+                Some(g) if g.status == 404 || g.code.contains("InvalidUser") || g.code.contains("NotFound") => {
+                    format!("No {what} found for {email}")
+                }
+                _ => format!("Could not open {email}: {e:#}"),
+            });
+        }
+    }
+    let _ = app.emit("accounts://changed", ());
+    st.sync_kick.notify_one();
+    st.db.account(&id).map_err(err)?.ok_or_else(|| "no such account".into())
 }
 
 #[tauri::command]
