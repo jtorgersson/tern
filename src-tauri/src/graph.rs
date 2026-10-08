@@ -120,7 +120,7 @@ pub(crate) async fn call_once(st: &AppState, account_id: &str, path: &str, body:
             message: v.pointer("/error/message").and_then(Value::as_str).unwrap_or(&text).into(),
         }.into());
     }
-    Ok(v)
+    Ok(serde_json::from_str(&text)?)
 }
 
 /// Used during sign-in, before the account exists.

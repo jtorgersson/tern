@@ -3,7 +3,8 @@
 AI-native, keyboard-first mail, calendar, and conversations for Omarchy. It's built with Tauri 2, Rust, and Svelte 5.
 
 - **Microsoft 365 / Outlook.com** via Microsoft Graph. Multiple accounts and a unified inbox are supported, and delta sync runs every 60s.
-- **Connect:** Microsoft Teams chats and channels beside your mail or calendar (`g b`). Read and send messages, browse channel threads, and reply without switching apps. Resize the dock or expand it; conversation drafts survive navigation and closing the dock during the session. Calls, attachments, and new chats open in Teams. Work or school accounts only; enable access per account.
+- **Connect:** Microsoft Teams chats and channels beside your mail or calendar (`g b`). Read and send messages, browse channel threads, and reply without switching apps. Resize the dock or expand it; conversation drafts survive navigation and closing the dock during the session. Create chats with new people or groups, draft replies with AI, catch up on a thread, and turn conversations into email or meeting drafts. Calls and attachments open in Teams. Work or school accounts only; enable access per account.
+- **One search across your day:** the top search field (`/`) returns mail, calendar events, and Connect messages together, with source tabs and account filtering. Connect results search Microsoft’s index, including conversations you haven’t opened in Tern.
 - **Your Omarchy theme, live.** Colors come from `~/.local/state/omarchy/current/theme/colors.toml` and update when you switch themes. The window is translucent, so Hyprland blur shows through.
 - **AI that does the work:**
   - Triage sorts mail into *Needs reply / Action / FYI / Newsletters / Notifications / Receipts*.
@@ -45,7 +46,7 @@ Connect is Tern’s conversation workspace. Open **Connect** in the sidebar, use
 
 In your existing Entra app registration, add these **Microsoft Graph → Delegated** permissions:
 
-- `Chat.Read`, `ChatMessage.Send`
+- `Chat.Read`, `ChatMessage.Send`, `Chat.Create`, `User.ReadBasic.All`
 - `Team.ReadBasic.All`, `Channel.ReadBasic.All`
 - `ChannelMessage.Read.All`, `ChannelMessage.Send`
 
@@ -53,7 +54,15 @@ Then choose your work or school account in Connect and click **Enable Connect**.
 
 Chats and channels use your existing Teams conversations. The selected conversation refreshes every 15 seconds while Connect is open and Tern is visible; the conversation list refreshes every minute. Use **Load more** for earlier messages and additional conversations. **Ctrl+Enter** sends; Enter adds a line. Failed sends retain the draft and are not automatically retried, since delivery can be uncertain.
 
-This integration currently handles reading and sending text messages, channel posts, and threaded replies. Calls, meetings, file access, and starting new chats hand off to Teams. Presence, reactions, typing indicators, unread/read-state synchronization, and push notifications are not implemented. Messages and drafts are kept in memory for this session, without an offline Teams cache. Microsoft’s Teams chat/channel APIs do not support personal Microsoft accounts.
+Use **+ New conversation** to find people in your organization by name or email. Select one person to open/reuse their direct chat, or several to create a named group. The new permissions are `Chat.Create` and `User.ReadBasic.All`; existing Connect users see **Enable new conversations** before using the picker. The upgrade keeps existing read/send consent intact until you approve the new permissions. Directory availability and guest/external access depend on Microsoft tenant policy.
+
+**Writing assistant** uses your configured AI provider to stream reply suggestions. Add an instruction, choose **Shorter**, **Warmer**, or **Ask a question**, then review and use the suggestion. Existing drafts are replaced only when you click **Replace draft**. **Catch me up** summarizes loaded messages, decisions, and next steps; you can turn the brief into a meeting draft. The context is limited to the most recent 40 loaded, non-deleted messages (up to 18,000 characters), not the entire unseen history. The open email is included only if you check its checkbox. AI never sends messages or books meetings.
+
+**Discuss in Connect** in the mail reader opens the person picker with the sender (or recipient for your sent mail) and an editable excerpt of the email. **Email** in a conversation prepares an email addressed to the known chat participants; **Plan meeting** prepares an online calendar event. These handoffs use the same Microsoft account and leave the result for you to review. Existing email/event drafts are preserved. **Quote in reply** brings the selected message into the composer; in channels it opens the message’s thread.
+
+The main search field searches all three sources on Enter. Tabs narrow the displayed results; the account selector limits the search. Mail and calendar searches cover locally downloaded data (calendar shows up to 200 closest matches); Connect searches Microsoft’s live index in every enabled account, with pagination and independent errors/retry per account. Recent messages may take time to appear in Microsoft’s index. Selecting a result opens its email, calendar event, or exact Connect message. **Related** searches across all three sources using the current conversation title.
+
+This integration handles text messages, channel posts, threaded replies, new chats/groups, and AI writing. Calls, joining meetings, and file access hand off to Teams. Presence, reactions, typing indicators, unread/read-state synchronization, and push notifications are not implemented. Messages and drafts are kept in memory for this session, without an offline Teams cache. Microsoft’s Teams chat/channel APIs do not support personal Microsoft accounts.
 
 API references: [chats](https://learn.microsoft.com/en-us/graph/api/chat-list?view=graph-rest-1.0), [sending messages](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0), [channel messages](https://learn.microsoft.com/en-us/graph/api/channel-list-messages?view=graph-rest-1.0).
 
@@ -87,7 +96,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `u` | toggle read |
 | `r` / `Shift+R` / `f` | reply / reply all / forward |
 | `c` | compose |
-| `/` | search |
+| `/` | search mail, calendar, and Connect |
 | `g t` / `g c` / `g i` / `g s` / `g d` / `g x` | today / calendar / inbox / sent / drafts / trash |
 | `d` / `w` / `m` / `a` | calendar: day / week / month / agenda |
 | `h` / `l`, `t` | calendar: previous / next period, today |

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import GlobalSearch from "$lib/components/GlobalSearch.svelte";
   import Connect from "$lib/components/Connect.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { app } from "$lib/state/app.svelte";
@@ -127,6 +128,7 @@
       </aside>
     </div>
   </div>
+  <GlobalSearch />
   <AgentPanel />
   <Composer />
   <EventComposer />

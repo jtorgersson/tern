@@ -4,6 +4,7 @@ import type { Account } from "$lib/types";
 export type ConnectResource =
   | { kind: "chats" }
   | { kind: "teams" }
+  | { kind: "members"; chatId: string }
   | { kind: "channels"; teamId: string }
   | { kind: "chat"; chatId: string }
   | { kind: "channel"; teamId: string; channelId: string }
@@ -30,9 +31,13 @@ export interface ConnectChat {
   lastMessagePreview?: { body?: { content: string }; createdDateTime?: string } | null;
 }
 export interface ConnectGroup { id: string; displayName: string; webUrl?: string }
-export interface Conversation { title: string; resource: ConnectResource; webUrl?: string }
+export interface Conversation { title: string; resource: ConnectResource; webUrl?: string; members?: ConnectChat["members"] }
 
 export const connectApi = {
+  people: (accountId: string, query: string) => invoke<GraphPage<ConnectPerson>>("connect_people", { accountId, query }),
+  createChat: (accountId: string, userIds: string[], topic: string) => invoke<ConnectChat>("connect_create_chat", { accountId, userIds, topic }),
+  search: (accountId: string, query: string, from = 0) => invoke<ConnectSearchResponse>("connect_search", { accountId, query, from }),
+  message: (accountId: string, resource: ConnectResource, messageId: string) => invoke<ConnectMessage>("connect_message", { accountId, resource, messageId }),
   enable: (accountId: string) => invoke<Account>("connect_enable", { accountId }),
   list: <T>(accountId: string, resource: ConnectResource, next: string | null = null) =>
     invoke<GraphPage<T>>("connect_list", { accountId, resource, next }),
@@ -56,4 +61,42 @@ export function mergeMessages(previous: ConnectMessage[], incoming: ConnectMessa
 /** For previews only. Message bodies are separately sanitized before rendering. */
 export function previewText(html: string): string {
   return html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+
+export interface ConnectPerson { id: string; displayName: string; mail?: string | null; userPrincipalName: string; userType?: string | null }
+export interface ConnectSearchHit {
+  hitId: string;
+  summary: string;
+  resource: {
+    id: string; subject?: string; createdDateTime?: string; webUrl?: string;
+    chatId?: string; replyToId?: string | null;
+    channelIdentity?: { teamId?: string; channelId?: string };
+    from?: { user?: { displayName?: string }; emailAddress?: { name?: string; address?: string } };
+  };
+}
+export interface ConnectSearchResponse { value: { hitsContainers?: { hits?: ConnectSearchHit[]; moreResultsAvailable?: boolean }[] }[] }
+export function searchPage(response: ConnectSearchResponse) {
+  const containers = response.value.flatMap(v => v.hitsContainers ?? []);
+  return { hits: containers.flatMap(c => c.hits ?? []), more: containers.some(c => c.moreResultsAvailable) };
+}
+
+/** Resolve search hits to native conversations, including channel replies when Graph supplies a parent. */
+export function searchConversation(hit: ConnectSearchHit): Conversation | null {
+  const r = hit.resource;
+  const { teamId, channelId } = r.channelIdentity ?? {};
+  let parent = r.replyToId;
+  try { parent ||= new URL(r.webUrl ?? "").searchParams.get("parentMessageId"); } catch {}
+  if (teamId && channelId) return {
+    title: r.subject || "Channel conversation", webUrl: r.webUrl,
+    resource: parent && parent !== r.id ? { kind: "replies", teamId, channelId, messageId: parent } : { kind: "channel", teamId, channelId },
+  };
+  if (r.chatId) return { title: r.subject || "Conversation", webUrl: r.webUrl, resource: { kind: "chat", chatId: r.chatId } };
+  return null;
+}
+
+/** Bounded, attributed context shared by writing, email handoff, and meeting drafts. */
+export function conversationText(messages: ConnectMessage[]): string {
+  return messages.filter(m => !m.deletedDateTime).slice(-40).map(m =>
+    `${m.from?.user?.displayName || m.from?.application?.displayName || "Teams"} (${m.createdDateTime}): ${m.body.contentType === "html" ? previewText(m.body.content) : m.body.content}`,
+  ).join("\n\n").slice(-18000);
 }

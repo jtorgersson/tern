@@ -1,6 +1,7 @@
 // Global keyboard map. Single-key shortcuts are ignored while typing.
 import { app } from "$lib/state/app.svelte";
 import { composer } from "$lib/state/composer.svelte";
+import { search } from "$lib/state/search.svelte";
 import { connect } from "$lib/state/connect.svelte";
 import { calendar } from "$lib/state/calendar.svelte";
 
@@ -34,7 +35,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "g a", label: "Go to archive", group: "Navigate" },
   { keys: "g f", label: "Go to flagged", group: "Navigate" },
   { keys: "g r", label: "Go to Needs reply", group: "Navigate" },
-  { keys: "/", label: "Search", group: "Navigate" },
+  { keys: "/", label: "Search mail, calendar, and Connect", group: "Navigate" },
   { keys: "Esc", label: "Close / back", group: "Navigate" },
   { keys: "e", label: "Archive", group: "Act" },
   { keys: "#", label: "Delete", group: "Act" },
@@ -132,6 +133,11 @@ export function handleKey(e: KeyboardEvent) {
     app.syncNow();
     return;
   }
+  if (search.open && !app.paletteOpen && !app.settingsOpen) {
+    if (e.key === "Escape") { e.preventDefault(); search.close(); }
+    else if (e.key === "/" && !isTyping(e)) { e.preventDefault(); app.searchFocusTick++; }
+    return;
+  }
   if (e.key === "Escape" && (e.target as HTMLElement | null)?.closest("[data-connect]")) {
     (e.target as HTMLElement).blur?.();
     pendingG = false;
@@ -163,6 +169,7 @@ export function handleKey(e: KeyboardEvent) {
   // Keep conversation keyboard input from acting on the mail/calendar pane behind it.
   if ((e.target as HTMLElement | null)?.closest("[data-connect]") || (connect.open && connect.expanded)) {
     if (isTyping(e) || mod || e.altKey || app.paletteOpen || app.settingsOpen) return;
+    if (e.key === "/") { e.preventDefault(); app.searchFocusTick++; return; }
     if (pendingG) {
       pendingG = false;
       clearTimeout(gTimer);
@@ -234,7 +241,7 @@ export function handleKey(e: KeyboardEvent) {
       l: () => calendar.next(),
       ArrowRight: () => (grid && calendar.cursor ? calendar.moveCursor(1, 0) : calendar.next()),
       t: () => calendar.today(),
-      "/": () => calendar.searchFocusTick++,
+      "/": () => app.searchFocusTick++,
       "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
       g: () => {
         pendingG = true;

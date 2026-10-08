@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app } from "$lib/state/app.svelte";
+  import { search } from "$lib/state/search.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { Search, PenLine, Sparkles, Settings, RefreshCw, X } from "@lucide/svelte";
   import { connect } from "$lib/state/connect.svelte";
@@ -19,16 +20,16 @@
 
   // Mirror the active search view into the box.
   $effect(() => {
-    if (app.view.kind === "search") q = app.view.query;
+    if (search.open) q = search.query;
   });
 
   function submit(e: Event) {
     e.preventDefault();
-    app.search(q);
+    search.run(q);
   }
   function clear() {
     q = "";
-    app.search("");
+    search.run("");
   }
 </script>
 
@@ -43,7 +44,8 @@
     <input
       bind:this={input}
       bind:value={q}
-      placeholder="Search mail — from:, subject:, has:attachment"
+      aria-label="Search mail, calendar, and Connect"
+      placeholder="Search mail, calendar, and Connect…"
       spellcheck="false"
       onkeydown={(e) => {
         if (e.key === "Escape" && q) {

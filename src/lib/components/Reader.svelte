@@ -1,5 +1,7 @@
 <script lang="ts">
   import { app } from "$lib/state/app.svelte";
+  import { connect } from "$lib/state/connect.svelte";
+  import { MessageCircle } from "@lucide/svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { toasts } from "$lib/state/toasts.svelte";
   import { api } from "$lib/api";
@@ -104,6 +106,14 @@
     expanded = s;
   }
 
+  function discussEmail(message: MessageFull) {
+    const ownerId = app.accountById.get(message.accountId)?.ownerId || message.accountId;
+    const me = app.accountById.get(ownerId)?.email.toLowerCase();
+    const person = message.from.email.toLowerCase() === me ? message.to.find(a => a.email.toLowerCase() !== me) : message.from;
+    connect.show({ accountId: ownerId, recipient: person?.email ?? "", draft:
+      `About “${message.subject || "(no subject)"}”\n\n${message.bodyText.slice(0, 3000)}${message.webLink ? `\n\nEmail: ${message.webLink}` : ""}` });
+  }
+
   function addrList(list: Addr[]): string {
     return list.map((a) => displayName(a)).join(", ");
   }
@@ -150,6 +160,7 @@
           <button class="icon-btn" title="Open in Outlook on the web" onclick={() => openUrl(m.webLink!)}><ExternalLink size={16} /></button>
         {/if}
         {#if app.windowKind === "main"}
+          <button class="icon-btn" title="Discuss this email in Connect" aria-label="Discuss in Connect" onclick={() => discussEmail(m)}><MessageCircle size={16} /></button>
           <button class="icon-btn" title="Open in new window (O)" onclick={() => app.openInWindow(m.id)}><SquareArrowOutUpRight size={16} /></button>
         {:else}
           <button class="icon-btn" title="Close window (Esc)" onclick={() => getCurrentWindow().close()}><X size={16} /></button>
@@ -259,6 +270,8 @@
 
 <style>
   .reader {
+    container-type: inline-size;
+    container-name: reader;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -266,16 +279,20 @@
     background: color-mix(in oklab, var(--surface) 92%, var(--bg-lighter));
   }
   .toolbar {
-    height: 52px;
+    min-height: 52px;
+    flex-wrap: wrap;
+    gap: 4px;
     flex: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 14px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--line);
   }
   .group {
     display: flex;
+    flex-wrap: wrap;
+    max-width: 100%;
     gap: 2px;
   }
   .scroll {
@@ -483,5 +500,10 @@
   }
   .unsub .spacer {
     flex: 1;
+  }
+  @container reader (max-width: 450px) {
+    article { padding: 18px 14px 40px; }
+    .meta-row { flex-wrap: wrap; gap: 6px; }
+    .subject { font-size: 18px; }
   }
 </style>

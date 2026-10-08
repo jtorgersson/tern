@@ -22,6 +22,7 @@ pub struct Account {
     pub shared_consent: bool,
     /// Optional Microsoft Teams permissions for Connect.
     pub connect_consent: bool,
+    pub connect_compose_consent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

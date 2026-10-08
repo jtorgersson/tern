@@ -31,7 +31,7 @@ pub async fn connect_enable(app: AppHandle, st: St<'_>, account_id: String) -> R
     let result = async {
         let sign_in = auth::interactive(
             &st.http, &settings::ms_client_id(&s), &settings::ms_tenant(&s),
-            a.shared_consent, true, Some(&a.email), rx, || {}, || {},
+            a.shared_consent, true, true, Some(&a.email), rx, || {}, || {},
         ).await?;
         let (uid, email, _) = graph::me(&st.http, &sign_in.access_token).await?;
         if format!("ms-{uid}") != a.id || sign_in.tenant_id != a.tenant_id {
@@ -55,6 +55,7 @@ pub async fn connect_enable(app: AppHandle, st: St<'_>, account_id: String) -> R
 pub enum Resource {
     Chats,
     Teams,
+    Members { #[serde(rename = "chatId")] chat_id: String },
     Channels { #[serde(rename = "teamId")] team_id: String },
     Chat { #[serde(rename = "chatId")] chat_id: String },
     Channel { #[serde(rename = "teamId")] team_id: String, #[serde(rename = "channelId")] channel_id: String },
@@ -72,6 +73,7 @@ impl Resource {
     fn path(&self) -> Result<String> {
         Ok(match self {
             Self::Chats => "/chats".into(),
+            Self::Members { chat_id } => format!("/chats/{}/members", segment(chat_id)?),
             Self::Teams => "/me/joinedTeams".into(),
             Self::Channels { team_id } => format!("/teams/{}/channels", segment(team_id)?),
             Self::Chat { chat_id } => format!("/chats/{}/messages", segment(chat_id)?),
@@ -138,9 +140,119 @@ pub async fn connect_send(st: St<'_>, account_id: String, resource: Resource, te
     graph::call_once(&st, &account_id, &path, &body).await.map_err(friendly_error)
 }
 
+fn compose_account(st: &AppState, id: &str) -> Result<Account> {
+    let a = account(st, id, true)?;
+    if !a.connect_compose_consent { bail!("Reconnect Connect to allow finding people and creating conversations"); }
+    Ok(a)
+}
+
+fn people_path(query: &str) -> Result<String> {
+    let q = query.trim();
+    if q.chars().count() < 2 || q.len() > 200 { bail!("Enter 2–200 characters of a name or email address"); }
+    let literal = q.replace('\'', "''");
+    let filter = format!("startswith(displayName,'{literal}') or startswith(mail,'{literal}') or startswith(userPrincipalName,'{literal}') or startswith(givenName,'{literal}') or startswith(surname,'{literal}')");
+    let mut u = url::Url::parse("https://graph.microsoft.com/v1.0/users")?;
+    u.query_pairs_mut().append_pair("$select", "id,displayName,mail,userPrincipalName,userType").append_pair("$top", "20").append_pair("$filter", &filter);
+    Ok(u.to_string())
+}
+
+#[tauri::command]
+pub async fn connect_people(st: St<'_>, account_id: String, query: String) -> Result<Value, String> {
+    compose_account(&st, &account_id).map_err(friendly_error)?;
+    let path = people_path(&query).map_err(friendly_error)?;
+    graph::call(&st, &account_id, Method::GET, &path, None).await.map_err(friendly_error)
+}
+
+fn chat_body(me: &str, people: &[Value], topic: &str) -> Result<Value> {
+    let me = uuid::Uuid::parse_str(me)?.to_string();
+    let mut ids = std::collections::HashSet::from([me.clone()]);
+    let member = |id: &str, guest: bool| json!({
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        "roles": [if guest { "guest" } else { "owner" }],
+        "user@odata.bind": format!("https://graph.microsoft.com/v1.0/users('{id}')")
+    });
+    let mut members = vec![member(&me, false)];
+    for person in people {
+        let id = uuid::Uuid::parse_str(person["id"].as_str().unwrap_or_default())?.to_string();
+        if ids.insert(id.clone()) { members.push(member(&id, person["userType"].as_str() == Some("Guest"))); }
+    }
+    if members.len() < 2 || members.len() > 21 { bail!("Choose between 1 and 20 other people"); }
+    if topic.chars().count() > 250 { bail!("Use a conversation name of at most 250 characters"); }
+    let group = members.len() > 2;
+    let mut body = json!({ "chatType": if group { "group" } else { "oneOnOne" }, "members": members });
+    if group && !topic.trim().is_empty() { body["topic"] = json!(topic.trim()); }
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn connect_create_chat(st: St<'_>, account_id: String, user_ids: Vec<String>, topic: String) -> Result<Value, String> {
+    let a = compose_account(&st, &account_id).map_err(friendly_error)?;
+    if user_ids.is_empty() || user_ids.len() > 20 { return Err("Choose between 1 and 20 people".into()); }
+    let result = async {
+        let mut people = Vec::new();
+        // Resolve each selected identity server-side; names/emails from the UI aren't trusted IDs.
+        for id in user_ids {
+            let id = uuid::Uuid::parse_str(&id)?;
+            people.push(graph::call(&st, &account_id, Method::GET, &format!("/users/{id}?$select=id,displayName,mail,userPrincipalName,userType"), None).await?);
+        }
+        let body = chat_body(a.id.strip_prefix("ms-").unwrap_or_default(), &people, &topic)?;
+        // Creation may notify participants. Never retry an ambiguous POST automatically.
+        let mut chat = graph::call_once(&st, &account_id, "/chats", &body).await?;
+        if chat["id"].as_str().is_none() { bail!("Microsoft returned no conversation ID; check your chats before retrying"); }
+        chat["members"] = json!(people.iter().map(|p| json!({ "userId": p["id"], "displayName": p["displayName"], "email": p["mail"].as_str().or(p["userPrincipalName"].as_str()) })).collect::<Vec<_>>());
+        anyhow::Ok(chat)
+    }.await;
+    result.map_err(friendly_error)
+}
+
+#[tauri::command]
+pub async fn connect_search(st: St<'_>, account_id: String, query: String, from: u32) -> Result<Value, String> {
+    account(&st, &account_id, true).map_err(friendly_error)?;
+    if query.trim().is_empty() || query.len() > 1000 || from > 1000 { return Err("Use a query up to 1,000 characters and refine searches beyond 1,000 results".into()); }
+    let body = json!({ "requests": [{ "entityTypes": ["chatMessage"], "query": { "queryString": query.trim() }, "from": from, "size": 25, "enableTopResults": true }] });
+    graph::call(&st, &account_id, Method::POST, "/search/query", Some(&body)).await.map_err(friendly_error)
+}
+
+#[tauri::command]
+pub async fn connect_message(st: St<'_>, account_id: String, resource: Resource, message_id: String) -> Result<Value, String> {
+    account(&st, &account_id, true).map_err(friendly_error)?;
+    if !resource.can_send() { return Err("Select a conversation".into()); }
+    let path = format!("{}/{}", resource.path().map_err(friendly_error)?, segment(&message_id).map_err(friendly_error)?);
+    graph::call(&st, &account_id, Method::GET, &path, None).await.map_err(friendly_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creates_direct_or_group_with_validated_members() {
+        let me = "00000000-0000-0000-0000-000000000001";
+        let other = json!({"id": "00000000-0000-0000-0000-000000000002", "userType": "Member"});
+        let guest = json!({"id": "00000000-0000-0000-0000-000000000003", "userType": "Guest"});
+        let direct = chat_body(me, &[other.clone(), other.clone()], "ignored").unwrap();
+        assert_eq!(direct["chatType"], "oneOnOne");
+        assert_eq!(direct["members"].as_array().unwrap().len(), 2);
+        assert!(direct.get("topic").is_none());
+        let group = chat_body(me, &[other, guest], " Launch ").unwrap();
+        assert_eq!(group["chatType"], "group");
+        assert_eq!(group["topic"], "Launch");
+        assert_eq!(group["members"][2]["roles"][0], "guest");
+        assert!(chat_body(me, &[json!({"id": me})], "").is_err());
+        assert!(chat_body(me, &[json!({"id": "bad')/messages"})], "").is_err());
+    }
+
+    #[test]
+    fn directory_query_escapes_odata_literals_and_bounds_input() {
+        let path = people_path("O'Brien & Sons").unwrap();
+        let url = url::Url::parse(&path).unwrap();
+        assert_eq!(url.host_str(), Some("graph.microsoft.com"));
+        let filter = url.query_pairs().find(|(k, _)| k == "$filter").unwrap().1.into_owned();
+        assert!(filter.contains("'O''Brien & Sons'"));
+        assert_eq!(url.query_pairs().count(), 3);
+        assert!(people_path("a").is_err());
+        assert!(people_path(&"a".repeat(201)).is_err());
+    }
+
     #[test]
     fn pagination_is_bound_to_graph_and_conversation() {
         let r = Resource::Chat { chat_id: "19:abc@thread.v2".into() };

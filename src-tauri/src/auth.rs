@@ -20,10 +20,13 @@ pub const SHARED_SCOPES: &str = "Mail.ReadWrite.Shared Mail.Send.Shared Calendar
 
 pub const CONNECT_SCOPES: &str = "Chat.Read ChatMessage.Send Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All ChannelMessage.Send";
 
-fn scopes(shared: bool, connect: bool) -> String {
+pub const CONNECT_COMPOSE_SCOPES: &str = "Chat.Create User.ReadBasic.All";
+
+fn scopes(shared: bool, connect: bool, compose: bool) -> String {
     let mut result = SCOPES.to_string();
     if shared { result.push_str(&format!(" {SHARED_SCOPES}")); }
     if connect { result.push_str(&format!(" {CONNECT_SCOPES}")); }
+    if connect && compose { result.push_str(&format!(" {CONNECT_COMPOSE_SCOPES}")); }
     result
 }
 
@@ -121,6 +124,7 @@ pub async fn interactive(
     tenant: &str,
     shared: bool,
     connect: bool,
+    compose: bool,
     login_hint: Option<&str>,
     cancel: oneshot::Receiver<()>,
     on_waiting: impl FnOnce(),
@@ -135,7 +139,7 @@ pub async fn interactive(
     let verifier = random_b64(48);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_b64(16);
-    let scope = scopes(shared, connect);
+    let scope = scopes(shared, connect, compose);
 
     let mut auth = url::Url::parse(&format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"))?;
     auth.query_pairs_mut()
@@ -229,8 +233,9 @@ pub async fn access_token(st: &AppState, account_id: &str) -> Result<String> {
     let acc = st.db.account(account_id)?;
     let shared = acc.as_ref().is_some_and(|a| a.shared_consent);
     let connect = acc.as_ref().is_some_and(|a| a.connect_consent);
+    let compose = acc.as_ref().is_some_and(|a| a.connect_compose_consent);
     let email = acc.map(|a| a.email).unwrap_or_else(|| account_id.to_string());
-    let scope = scopes(shared, connect);
+    let scope = scopes(shared, connect, compose);
     let refresh = secrets::get(&refresh_key(account_id))?.ok_or_else(|| AuthError::Reauth(email.clone()))?;
     let settings = st.settings.read().unwrap().clone();
     let client_id = crate::settings::ms_client_id(&settings);
@@ -272,11 +277,13 @@ pub fn cache_token(st: &AppState, account_id: &str, token: &str) {
 mod tests {
     #[test]
     fn optional_scopes_do_not_block_normal_mail_sign_in() {
-        assert_eq!(super::scopes(false, false), super::SCOPES);
-        assert!(!super::scopes(true, false).contains("Chat.Read"));
-        let connect = super::scopes(false, true);
+        assert_eq!(super::scopes(false, false, false), super::SCOPES);
+        assert!(!super::scopes(true, false, false).contains("Chat.Read"));
+        let connect = super::scopes(false, true, false);
         assert!(connect.contains("Chat.Read") && !connect.contains("Mail.ReadWrite.Shared"));
-        let both = super::scopes(true, true);
+        assert!(!connect.contains("Chat.Create"));
+        assert!(super::scopes(false, true, true).contains("Chat.Create"));
+        let both = super::scopes(true, true, true);
         assert!(both.contains("Chat.Read") && both.contains("Mail.ReadWrite.Shared"));
     }
 }

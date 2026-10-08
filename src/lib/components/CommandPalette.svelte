@@ -2,6 +2,7 @@
   import { app, CATEGORY_META, SMART_CATEGORIES, wkLabel, type UiView } from "$lib/state/app.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { agent } from "$lib/state/agent.svelte";
+  import { search } from "$lib/state/search.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
   import { fuzzyScore } from "$lib/util/fuzzy";
@@ -109,7 +110,7 @@
     if (query) {
       if (app.aiReady)
         out.push({ id: "ask", label: `Ask Tern: “${query}”`, group: "Tern", hint: "↵", run: () => agent.send(query) });
-      out.push({ id: "search", label: `Search mail for “${query}”`, group: "Tern", run: () => app.search(query) });
+      out.push({ id: "search", label: `Search everywhere for “${query}”`, group: "Tern", run: () => search.run(query) });
     }
     // With a query, put the best command first unless nothing matched well.
     return query && scored.length && fuzzyScore(query, scored[0].label) > 900 ? [...scored, ...out] : [...out, ...scored];

@@ -102,6 +102,7 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             &tenant,
             false,
             false,
+            false,
             None,
             rx,
             || progress(&app, "waiting_browser", None),
@@ -127,6 +128,7 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             sync_mail: true,
             shared_consent: existing.as_ref().is_some_and(|a| a.shared_consent),
             connect_consent: existing.as_ref().is_some_and(|a| a.connect_consent),
+            connect_compose_consent: existing.as_ref().is_some_and(|a| a.connect_compose_consent),
         };
         secrets::set(&auth::refresh_key(&id), &sign_in.refresh_token)?;
         auth::cache_token(&st, &id, &sign_in.access_token);
@@ -194,6 +196,7 @@ pub async fn account_add_shared(app: AppHandle, st: St<'_>, owner_id: String, em
                 &settings::ms_tenant(&s),
                 true,
                 owner.connect_consent,
+                owner.connect_compose_consent,
                 Some(&owner.email),
                 rx,
                 || progress(&app, "waiting_browser", None),
@@ -235,6 +238,7 @@ pub async fn account_add_shared(app: AppHandle, st: St<'_>, owner_id: String, em
         sync_mail: mail,
         shared_consent: false,
         connect_consent: false,
+        connect_compose_consent: false,
     };
     st.db.upsert_account(&account).map_err(err)?;
     match graph::probe(&st, &id, mail).await {
@@ -658,8 +662,8 @@ pub fn calendar_sync(st: St) {
 }
 
 #[tauri::command]
-pub fn calendar_search(st: St, query: String, limit: Option<i64>) -> R<Vec<CalEvent>> {
-    st.db.search_events(&query, limit.unwrap_or(40).clamp(1, 200)).map_err(err)
+pub fn calendar_search(st: St, query: String, limit: Option<i64>, account_id: Option<String>) -> R<Vec<CalEvent>> {
+    st.db.search_events(&query, limit.unwrap_or(40).clamp(1, 200), account_id.as_deref()).map_err(err)
 }
 
 #[tauri::command]

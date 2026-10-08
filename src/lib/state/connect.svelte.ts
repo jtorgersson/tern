@@ -1,5 +1,19 @@
+import type { Conversation } from "$lib/connect";
 /** Dock state is independent of mail/calendar navigation. */
 class ConnectState {
+  request = $state<{
+    accountId: string;
+    conversation?: Conversation;
+    messageId?: string;
+    recipient?: string;
+    draft?: string;
+  } | null>(null);
+  show(request: NonNullable<ConnectState["request"]>) {
+    this.open = true;
+    this.expanded = false;
+    this.request = request;
+    try { localStorage.setItem("tern.connect.open", "true"); } catch {}
+  }
   open = $state(false);
   expanded = $state(false);
   width = $state(480);

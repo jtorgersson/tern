@@ -109,7 +109,7 @@ export const api = {
   availability: (accountId: string, emails: string[], from: string, to: string, interval = 30) =>
     invoke<Availability[]>("calendar_availability", { accountId, emails, from, to, interval }),
   /** Free-text search over every cached event (subject, place, people, notes), closest to now first. */
-  calendarSearch: (query: string, limit = 40) => invoke<CalEvent[]>("calendar_search", { query, limit }),
+  calendarSearch: (query: string, limit = 40, accountId: string | null = null) => invoke<CalEvent[]>("calendar_search", { query, limit, accountId }),
   eventCreate: (draft: EventDraft) => invoke<CalEvent>("event_create", { draft }),
   freeSlots: (query: FreeSlotQuery) => invoke<FreeSlot[]>("calendar_free_slots", { query }),
   /** The user's calendars (all accounts unless filtered), default calendar first. */

@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   owner_id TEXT,
   sync_mail INTEGER NOT NULL DEFAULT 1,
   shared_consent INTEGER NOT NULL DEFAULT 0,
-  connect_consent INTEGER NOT NULL DEFAULT 0
+  connect_consent INTEGER NOT NULL DEFAULT 0,
+  connect_compose_consent INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -181,6 +182,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         ("sync_mail", "INTEGER NOT NULL DEFAULT 1"),
         ("shared_consent", "INTEGER NOT NULL DEFAULT 0"),
         ("connect_consent", "INTEGER NOT NULL DEFAULT 0"),
+        ("connect_compose_consent", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('accounts') WHERE name = ?1")?.exists([col])?;
         if !has {
@@ -285,7 +287,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
 }
 
 const ACCOUNT_COLS: &str =
-    "id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message, owner_id, sync_mail, shared_consent, connect_consent";
+    "id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message, owner_id, sync_mail, shared_consent, connect_consent, connect_compose_consent";
 
 fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
     Ok(Account {
@@ -302,6 +304,7 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         sync_mail: r.get::<_, i64>(10)? != 0,
         shared_consent: r.get::<_, i64>(11)? != 0,
         connect_consent: r.get::<_, i64>(12)? != 0,
+        connect_compose_consent: r.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -401,7 +404,7 @@ impl Db {
     }
 
     pub fn set_connect_consent(&self, id: &str) -> Result<()> {
-        self.conn().execute("UPDATE accounts SET connect_consent = 1 WHERE id = ?", [id])?;
+        self.conn().execute("UPDATE accounts SET connect_consent = 1, connect_compose_consent = 1 WHERE id = ?", [id])?;
         Ok(())
     }
 
@@ -967,14 +970,18 @@ impl Db {
     }
 
     /// Case-insensitive search over subject, location, attendees, organizer and preview of every cached event.
-    pub fn search_events(&self, query: &str, limit: i64) -> Result<Vec<CalEvent>> {
-        let words: Vec<String> = query.split_whitespace().map(|w| format!("%{}%", w.to_lowercase().replace('%', ""))).collect();
+    pub fn search_events(&self, query: &str, limit: i64, account_id: Option<&str>) -> Result<Vec<CalEvent>> {
+        let mut words: Vec<String> = query.split_whitespace().map(|w| format!("%{}%", w.to_lowercase().replace('%', ""))).collect();
         if words.is_empty() {
             return Ok(vec![]);
         }
         let c = self.conn();
         let hay = "lower(subject || ' ' || coalesce(location,'') || ' ' || attendees_json || ' ' || coalesce(organizer_json,'') || ' ' || preview)";
-        let conds: Vec<String> = (1..=words.len()).map(|i| format!("{hay} LIKE ?{i}")).collect();
+        let mut conds: Vec<String> = (1..=words.len()).map(|i| format!("{hay} LIKE ?{i}")).collect();
+        if let Some(id) = account_id {
+            words.push(id.to_string());
+            conds.push(format!("account_id = ?{}", words.len()));
+        }
         let sql = format!(
             "SELECT {EVENT_COLS} FROM events WHERE {} ORDER BY abs(julianday(start_local) - julianday('now','localtime')) LIMIT {limit}",
             conds.join(" AND ")
@@ -1201,6 +1208,7 @@ mod tests {
             sync_mail: true,
             shared_consent: false,
             connect_consent: false,
+            connect_compose_consent: false,
         })
         .unwrap();
         let f = |id: &str, wk: Option<&str>| Folder {
@@ -1249,6 +1257,20 @@ mod tests {
     }
 
     #[test]
+    fn connect_upgrade_does_not_change_existing_read_consent() {
+        let db = mem();
+        seed(&db);
+        db.conn().execute_batch("UPDATE accounts SET connect_consent = 1; ALTER TABLE accounts DROP COLUMN connect_compose_consent").unwrap();
+        migrate(&db.conn()).unwrap();
+        let a = db.account("a1").unwrap().unwrap();
+        assert!(a.connect_consent);
+        assert!(!a.connect_compose_consent);
+        db.set_connect_consent("a1").unwrap();
+        db.upsert_account(&a).unwrap();
+        assert!(db.account("a1").unwrap().unwrap().connect_compose_consent);
+    }
+
+    #[test]
     fn connect_consent_migrates_and_survives_account_refresh() {
         let db = mem();
         seed(&db);
@@ -1283,6 +1305,7 @@ mod tests {
             sync_mail: false,
             shared_consent: false,
             connect_consent: false,
+            connect_compose_consent: false,
         };
         db.upsert_account(&shared).unwrap();
         db.set_shared_consent("a1").unwrap();
@@ -1375,6 +1398,25 @@ mod tests {
             calendar_id: String::new(), event_type: "singleInstance".into(), reminder_minutes: Some(15),
             sensitivity: "normal".into(), importance: "normal".into(), categories: vec![],
         }
+    }
+
+    #[test]
+    fn calendar_search_filters_account_before_limiting() {
+        let db = mem();
+        seed(&db);
+        let mut second = db.account("a1").unwrap().unwrap();
+        second.id = "a2".into();
+        db.upsert_account(&second).unwrap();
+        let a = ev("launch-a", "2026-10-06T10:00:00", "2026-10-06T11:00:00");
+        let mut b = ev("launch-b", "2026-10-07T10:00:00", "2026-10-07T11:00:00");
+        b.account_id = "a2".into();
+        db.replace_events("a1", "2026-10-01", "2026-10-31", &[a]).unwrap();
+        db.replace_events("a2", "2026-10-01", "2026-10-31", &[b]).unwrap();
+        assert_eq!(db.search_events("launch", 20, None).unwrap().len(), 2);
+        let hits = db.search_events("launch", 1, Some("a1")).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "launch-a");
+        assert!(db.search_events("launch", 20, Some("missing")).unwrap().is_empty());
     }
 
     #[test]

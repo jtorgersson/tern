@@ -1,17 +1,30 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import DOMPurify from "dompurify";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2 } from "@lucide/svelte";
+  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2, Plus, Mail, CalendarPlus, Search } from "@lucide/svelte";
   import { app } from "$lib/state/app.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { api } from "$lib/api";
-  import { connectApi, chatTitle, mergeMessages, previewText, type ConnectResource, type ConnectChat, type ConnectGroup, type ConnectMessage, type Conversation } from "$lib/connect";
-  import { errMsg } from "$lib/util/misc";
+  import { connectApi, chatTitle, mergeMessages, previewText, type GraphPage, type ConnectResource, type ConnectChat, type ConnectGroup, type ConnectMessage, type Conversation } from "$lib/connect";
+  import { errMsg, textToHtml } from "$lib/util/misc";
+  import { conversationText } from "$lib/connect";
+  import { composer } from "$lib/state/composer.svelte";
+  import { calendar } from "$lib/state/calendar.svelte";
+  import { search } from "$lib/state/search.svelte";
+  import { toasts } from "$lib/state/toasts.svelte";
+  import NewConversation from "./NewConversation.svelte";
+  import ConnectAssistant from "./ConnectAssistant.svelte";
 
   let accountId = $state("");
   const account = $derived(app.ownAccounts.find(a => a.id === accountId));
   const personal = $derived(account?.tenantId === "9188040d-6c67-4c5b-b112-36a304b66dad");
+  let newMode = $state(false);
+  let newRecipient = $state("");
+  let newDraft = $state("");
+  let wizardVersion = $state(0);
+  let highlighted = $state<string | null>(null);
+  let previousAccount = "";
   let consenting = $state(false);
   let consentError = $state("");
   let listing = $state<ConnectResource>({ kind: "chats" });
@@ -46,6 +59,7 @@
   $effect(() => {
     const id = accountId;
     const enabled = account?.connectConsent;
+    if (previousAccount !== id) { newMode = false; newRecipient = newDraft = ""; previousAccount = id; }
     accountEpoch++;
     listSeq++;
     messageSeq++;
@@ -73,6 +87,54 @@
     }, 60_000);
     return () => { clearInterval(timer); clearInterval(listTimer); };
   });
+
+  $effect(() => {
+    const request = connect.request;
+    if (!request) return;
+    if (!app.ownAccounts.some(a => a.id === request.accountId)) {
+      connect.request = null;
+      return;
+    }
+    if (accountId !== request.accountId) { accountId = request.accountId; return; }
+    if (!account?.connectConsent) return;
+    untrack(() => {
+      connect.request = null;
+      if (request.conversation) {
+        newMode = false; parent = null; rootMessage = null;
+        select(request.conversation, request.messageId);
+      } else {
+        startNew(request.recipient, request.draft);
+      }
+    });
+  });
+
+  function startNew(recipient = "", initialDraft = "") {
+    newRecipient = recipient;
+    newDraft = initialDraft;
+    wizardVersion++;
+    newMode = true;
+  }
+  function created(chat: ConnectChat, initialDraft: string) {
+    newMode = false; parent = null; rootMessage = null;
+    select({ title: chatTitle(chat, accountId), resource: { kind: "chat", chatId: chat.id }, members: chat.members, webUrl: chat.webUrl });
+    if (initialDraft) drafts[draftKey] = initialDraft;
+    void loadList({ kind: "chats" });
+  }
+  function participants() {
+    return (active?.members ?? parent?.members ?? []).filter(m => `ms-${m.userId}` !== accountId && m.email).map(m => ({ name: m.displayName, email: m.email! }));
+  }
+  function emailConversation() {
+    if (!active || composer.open) return;
+    composer.compose({ accountId, to: participants(), subject: active.title,
+      bodyHtml: textToHtml(conversationText(messages.slice(-10)) + (active.webUrl ? `\n\nConversation: ${active.webUrl}` : "")) });
+  }
+  function planMeeting(brief = "") {
+    if (!active) return;
+    if (calendar.composerOpen) { toasts.show("Finish or close your current event draft first."); return; }
+    calendar.openComposer({ accountId, subject: active.title === "Thread" ? parent?.title || "Conversation follow-up" : active.title,
+      attendees: participants(), isOnline: true,
+      body: (brief || conversationText(messages.slice(-10))) + (active.webUrl ? `\n\nConversation: ${active.webUrl}` : "") });
+  }
 
   function rowTitle(row: ConnectChat | ConnectGroup) {
     return "chatType" in row ? chatTitle(row, accountId) : row.displayName;
@@ -113,20 +175,42 @@
     } else {
       parent = null;
       rootMessage = null;
-      select({ title: rowTitle(row), webUrl: row.webUrl, resource: listing.kind === "channels"
+      select({ title: rowTitle(row), webUrl: row.webUrl, members: "chatType" in row ? row.members : undefined, resource: listing.kind === "channels"
         ? { kind: "channel", teamId: listing.teamId, channelId: row.id }
         : { kind: "chat", chatId: row.id } });
     }
   }
-  function select(conversation: Conversation) {
+  function select(conversation: Conversation, messageId?: string) {
+    highlighted = messageId ?? null;
     active = conversation;
     messages = [];
     messageNext = null;
     messageError = sendError = "";
     olderLoading = false;
-    void loadMessages();
+    void loadMessages(false, messageId);
+    if (conversation.resource.kind === "chat" && !conversation.members) void loadMembers(conversation.resource.chatId);
   }
-  async function loadMessages(silent = false) {
+  async function loadMembers(chatId: string) {
+    const id = accountId, epoch = accountEpoch;
+    const resource: ConnectResource = { kind: "members", chatId };
+    try {
+      let members: NonNullable<ConnectChat["members"]> = [];
+      let next: string | null = null;
+      do {
+        const page: GraphPage<NonNullable<ConnectChat["members"]>[number]> = await connectApi.list<NonNullable<ConnectChat["members"]>[number]>(id, resource, next);
+        if (epoch !== accountEpoch || active?.resource.kind !== "chat" || active.resource.chatId !== chatId) return;
+        members = [...members, ...page.value];
+        next = page["@odata.nextLink"] ?? null;
+      } while (next);
+      if (active) active = { ...active, members };
+    } catch (e) { if (epoch === accountEpoch && active?.resource.kind === "chat" && active.resource.chatId === chatId) messageError = `Could not load participants: ${errMsg(e)}`; }
+  }
+  function quote(message: ConnectMessage) {
+    if (active?.resource.kind === "channel") replies(message);
+    const text = message.body.contentType === "html" ? previewText(message.body.content) : message.body.content;
+    drafts[draftKey] = `${message.from?.user?.displayName || "Teams"} wrote: “${text.slice(0, 2000)}”\n\n${drafts[draftKey] || ""}`;
+  }
+  async function loadMessages(silent = false, messageId?: string) {
     if (!active) return;
     const seq = ++messageSeq;
     const id = accountId;
@@ -135,11 +219,20 @@
     messageLoading = true;
     try {
       const page = await connectApi.list<ConnectMessage>(id, resource);
+      if (messageId && !page.value.some(m => m.id === messageId)) {
+        page.value.push(await connectApi.message(id, resource, messageId));
+      }
       if (seq !== messageSeq || id !== accountId) return;
       messages = mergeMessages(silent ? messages : [], page.value);
       if (!silent) messageNext = page["@odata.nextLink"] ?? null;
       messageError = "";
-      if (!silent || nearBottom) { await tick(); if (seq === messageSeq && scroller) scroller.scrollTop = scroller.scrollHeight; }
+      if (!silent || nearBottom) {
+        await tick();
+        if (seq === messageSeq && scroller) {
+          if (messageId) scroller.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center" });
+          else scroller.scrollTop = scroller.scrollHeight;
+        }
+      }
     } catch (e) { if (seq === messageSeq) messageError = errMsg(e); }
     finally { if (seq === messageSeq) messageLoading = false; }
   }
@@ -239,12 +332,15 @@
       {#if consenting}<button class="text-btn" onclick={() => api.cancelAuth()}>Cancel sign-in</button>{/if}
       <button class="text-btn" onclick={() => app.openSettings("accounts")}>Manage accounts</button>
     </div>
+  {:else if newMode}
+    {#key `${accountId}:${wizardVersion}`}<NewConversation {account} initialRecipient={newRecipient} initialDraft={newDraft} {consenting} onEnable={enable} onCancel={() => newMode = false} onCreated={created} />{/key}
   {:else}
     <div class="workspace" class:has-conversation={!!active}>
       <div class="browser">
         <div class="tabs">
           <button class:chosen={listing.kind === "chats"} onclick={() => loadList({ kind: "chats" })}><MessageCircle size={14} />Chats</button>
           <button class:chosen={listing.kind !== "chats"} onclick={() => loadList({ kind: "teams" })}><Hash size={14} />Channels</button>
+          <button class="icon-btn" aria-label="New conversation" title="New conversation" onclick={() => startNew()}><Plus size={15} /></button>
           <button class="icon-btn refresh" disabled={listLoading} aria-label="Refresh conversations" onclick={() => loadList(listing)}><RefreshCw size={13} class={listLoading ? "spin" : ""} /></button>
         </div>
         {#if listing.kind === "channels"}<button class="group-back" onclick={() => loadList({ kind: "teams" })}><ArrowLeft size={13} />{groupTitle}</button>{/if}
@@ -271,13 +367,18 @@
             <button class="icon-btn" disabled={messageLoading || olderLoading} aria-label="Refresh messages" onclick={() => loadMessages(true)}><RefreshCw size={14} class={messageLoading ? "spin" : ""} /></button>
             <button class="icon-btn" title="Open in Teams for calls, files, and more" aria-label="Open conversation in Teams" onclick={() => external()}><ExternalLink size={14} /></button>
           </div>
+          <div class="bridges">
+            <button title={composer.open ? "Finish your current email draft first" : "Draft an email from this conversation"} disabled={composer.open} onclick={emailConversation}><Mail size={12} /> Email</button>
+            <button onclick={() => planMeeting()}><CalendarPlus size={12} /> Plan meeting</button>
+            <button onclick={() => { search.accountId = accountId; search.tab = "all"; void search.run(active?.title || ""); }}><Search size={12} /> Related</button>
+          </div>
           {#if messageError}<p class="error" role="alert">{messageError}</p>{/if}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
           <div class="messages" bind:this={scroller} onclick={bodyLink}>
             {#if rootMessage}<div class="thread-root"><strong>{rootMessage.from?.user?.displayName || "Channel post"}</strong><p>{previewText(rootMessage.body.content)}</p></div>{/if}
             {#if messageNext}<button class="load-more" disabled={olderLoading || messageLoading} onclick={older}>{olderLoading ? "Loading…" : "Load more messages"}</button>{/if}
             {#each messages as message (message.id)}
-              <article class="message" class:mine={`ms-${message.from?.user?.id}` === accountId}>
+              <article class="message" data-message-id={message.id} class:highlighted={message.id === highlighted} class:mine={`ms-${message.from?.user?.id}` === accountId}>
                 <div class="message-meta"><strong>{message.from?.user?.displayName || message.from?.application?.displayName || "Teams"}</strong><time datetime={message.createdDateTime}>{when(message.createdDateTime)}</time></div>
                 {#if message.deletedDateTime}<p class="deleted">Message deleted</p>
                 {:else}
@@ -286,18 +387,22 @@
                   {:else}<div class="message-body plain">{message.body.content || "Activity in Teams"}</div>{/if}
                   {#if message.lastEditedDateTime}<small class="edited">Edited</small>{/if}
                   {#if message.attachments?.length}<button class="text-btn" onclick={() => external(message.webUrl || active?.webUrl)}>Open {message.attachments.length} attachment(s) in Teams <ExternalLink size={11} /></button>{/if}
+                  <button class="text-btn" onclick={() => quote(message)}>Quote in reply</button>
                   {#if active.resource.kind === "channel"}<button class="text-btn" onclick={() => replies(message)}>View thread / reply</button>{/if}
                 {/if}
               </article>
             {:else}<p class="empty">{messageLoading ? "Loading messages…" : messageError ? "Messages couldn’t be loaded." : "No messages yet. Start the conversation below."}</p>{/each}
           </div>
           <form class="compose" onsubmit={(e) => { e.preventDefault(); void send(); }}>
+            {#key draftKey}
+              <ConnectAssistant {account} conversation={active} messages={rootMessage ? [rootMessage, ...messages] : messages} {draft} onUse={(text) => drafts[draftKey] = text} onPlan={planMeeting} />
+            {/key}
             {#if sendError}<p class="error" role="alert">{sendError}</p>{/if}
             <textarea aria-label="Message" placeholder={active.resource.kind === "channel" ? "Start a new channel post…" : "Write a message…"} value={draft} oninput={(e) => drafts[draftKey] = e.currentTarget.value} rows="3" maxlength="20000"
-              onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void send(); } }}></textarea>
+              onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void send(); } }}></textarea>
             <div class="compose-footer"><span>Ctrl + Enter to send · Updates every 15s</span><button class="btn primary" disabled={!draft.trim() || sending} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
           </form>
-        {:else}<div class="empty-state"><MessageCircle size={32} /><h3>Keep the conversation close</h3><p>Choose a chat or channel. Your mail and calendar stay right beside it.</p><button class="text-btn" onclick={() => external("https://teams.microsoft.com/l/chat/0/0")}>Start a new chat in Teams <ExternalLink size={12} /></button></div>{/if}
+        {:else}<div class="empty-state"><MessageCircle size={32} /><h3>Keep the conversation close</h3><p>Choose a chat or channel. Your mail and calendar stay right beside it.</p><button class="btn primary" onclick={() => startNew()}><Plus size={13} /> New conversation</button></div>{/if}
       </div>
     </div>
   {/if}
@@ -334,11 +439,14 @@
   .conversation-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-back { display: flex; align-items: center; gap: 6px; padding: 0 16px 9px; font-size: 12px; color: var(--muted); }
   .conversation-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .bridges { display: flex; gap: 12px; padding: 5px 14px 9px; border-bottom: 1px solid var(--line); }
+  .bridges button { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--accent); }
   .conversation-heading { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   .conversation-heading > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .conversation-heading strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; overflow-wrap: anywhere; user-select: text; }
   .message { margin: 0 0 18px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .message.highlighted { outline: 2px solid var(--accent); outline-offset: 3px; }
   .message.mine { border-color: var(--accent-line); background: var(--accent-soft); }
   .message-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-bottom: 7px; }
   .message-meta strong { font-size: 11px; font-weight: 600; }
@@ -351,7 +459,7 @@
   .message-body :global(blockquote) { border-left: 2px solid var(--accent-line); padding-left: 10px; margin-left: 0; }
   .deleted, .edited { color: var(--muted); font-size: 11px; }
   .thread-root { padding: 12px; border-left: 2px solid var(--accent); background: var(--panel); margin-bottom: 16px; font-size: 12px; }
-  .compose { border-top: 1px solid var(--line); padding: 12px; }
+  .compose { flex: none; max-height: 58%; overflow-y: auto; border-top: 1px solid var(--line); padding: 12px; }
   textarea { width: 100%; resize: vertical; max-height: 200px; min-height: 64px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--fg); font-family: inherit; font-size: 13px; }
   textarea:focus { outline: 1px solid var(--accent); }
   .compose-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
