@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
   owner_id TEXT,
   sync_mail INTEGER NOT NULL DEFAULT 1,
-  shared_consent INTEGER NOT NULL DEFAULT 0
+  shared_consent INTEGER NOT NULL DEFAULT 0,
+  connect_consent INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -179,6 +180,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         ("owner_id", "TEXT"),
         ("sync_mail", "INTEGER NOT NULL DEFAULT 1"),
         ("shared_consent", "INTEGER NOT NULL DEFAULT 0"),
+        ("connect_consent", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('accounts') WHERE name = ?1")?.exists([col])?;
         if !has {
@@ -283,7 +285,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
 }
 
 const ACCOUNT_COLS: &str =
-    "id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message, owner_id, sync_mail, shared_consent";
+    "id, provider, email, display_name, hue, tenant_id, last_sync, status, status_message, owner_id, sync_mail, shared_consent, connect_consent";
 
 fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
     Ok(Account {
@@ -299,6 +301,7 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         owner_id: r.get(9)?,
         sync_mail: r.get::<_, i64>(10)? != 0,
         shared_consent: r.get::<_, i64>(11)? != 0,
+        connect_consent: r.get::<_, i64>(12)? != 0,
     })
 }
 
@@ -394,6 +397,11 @@ impl Db {
                sync_mail = excluded.sync_mail, status = 'ok', status_message = NULL",
             params![a.id, a.provider, a.email, a.display_name, a.hue, a.tenant_id, sort, a.owner_id, a.sync_mail as i64],
         )?;
+        Ok(())
+    }
+
+    pub fn set_connect_consent(&self, id: &str) -> Result<()> {
+        self.conn().execute("UPDATE accounts SET connect_consent = 1 WHERE id = ?", [id])?;
         Ok(())
     }
 
@@ -1192,6 +1200,7 @@ mod tests {
             owner_id: None,
             sync_mail: true,
             shared_consent: false,
+            connect_consent: false,
         })
         .unwrap();
         let f = |id: &str, wk: Option<&str>| Folder {
@@ -1240,6 +1249,23 @@ mod tests {
     }
 
     #[test]
+    fn connect_consent_migrates_and_survives_account_refresh() {
+        let db = mem();
+        seed(&db);
+        db.conn().execute_batch("ALTER TABLE accounts DROP COLUMN connect_consent").unwrap();
+        migrate(&db.conn()).unwrap();
+        assert!(!db.account("a1").unwrap().unwrap().connect_consent);
+        db.set_connect_consent("a1").unwrap();
+        let mut account = db.account("a1").unwrap().unwrap();
+        assert!(account.connect_consent);
+        account.connect_consent = false;
+        db.upsert_account(&account).unwrap();
+        assert!(db.account("a1").unwrap().unwrap().connect_consent);
+        migrate(&db.conn()).unwrap();
+        assert!(db.account("a1").unwrap().unwrap().connect_consent);
+    }
+
+    #[test]
     fn shared_accounts_follow_their_owner() {
         let db = mem();
         seed(&db);
@@ -1256,6 +1282,7 @@ mod tests {
             owner_id: Some("a1".into()),
             sync_mail: false,
             shared_consent: false,
+            connect_consent: false,
         };
         db.upsert_account(&shared).unwrap();
         db.set_shared_consent("a1").unwrap();

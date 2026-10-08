@@ -1,8 +1,9 @@
 # Tern
 
-AI-native, keyboard-first mail for Omarchy. It's built with Tauri 2, Rust, and Svelte 5.
+AI-native, keyboard-first mail, calendar, and conversations for Omarchy. It's built with Tauri 2, Rust, and Svelte 5.
 
 - **Microsoft 365 / Outlook.com** via Microsoft Graph. Multiple accounts and a unified inbox are supported, and delta sync runs every 60s.
+- **Connect:** Microsoft Teams chats and channels beside your mail or calendar (`g b`). Read and send messages, browse channel threads, and reply without switching apps. Resize the dock or expand it; conversation drafts survive navigation and closing the dock during the session. Calls, attachments, and new chats open in Teams. Work or school accounts only; enable access per account.
 - **Your Omarchy theme, live.** Colors come from `~/.local/state/omarchy/current/theme/colors.toml` and update when you switch themes. The window is translucent, so Hyprland blur shows through.
 - **AI that does the work:**
   - Triage sorts mail into *Needs reply / Action / FYI / Newsletters / Notifications / Receipts*.
@@ -37,6 +38,24 @@ Tern is a *public client*, so it has no secret. You need a client ID from an Ent
 6. Copy the **Application (client) ID**. Paste it on Tern's welcome screen, then **Sign in with Microsoft**.
 
 To add more accounts, go to Settings → Accounts → *Add Microsoft account*. Other tenants work too, provided the registration is multi-tenant and their admins allow it.
+
+## Connect with Microsoft Teams
+
+Connect is Tern’s conversation workspace. Open **Connect** in the sidebar, use the toolbar’s conversation button, or press **g b**. It stays open as you switch between your inbox and calendar; drag the divider to resize it or use Expand to focus on conversations. On smaller windows the mail sidebar is hidden while docked; the command palette and navigation shortcuts remain available.
+
+In your existing Entra app registration, add these **Microsoft Graph → Delegated** permissions:
+
+- `Chat.Read`, `ChatMessage.Send`
+- `Team.ReadBasic.All`, `Channel.ReadBasic.All`
+- `ChannelMessage.Read.All`, `ChannelMessage.Send`
+
+Then choose your work or school account in Connect and click **Enable Connect**. Sign in as the same account and organization. Channel access can require administrator consent; if Microsoft blocks approval, ask your administrator to approve the permissions. **Reconnect** retries consent after permissions change. Regular mail/calendar sign-in does not request these optional permissions.
+
+Chats and channels use your existing Teams conversations. The selected conversation refreshes every 15 seconds while Connect is open and Tern is visible; the conversation list refreshes every minute. Use **Load more** for earlier messages and additional conversations. **Ctrl+Enter** sends; Enter adds a line. Failed sends retain the draft and are not automatically retried, since delivery can be uncertain.
+
+This integration currently handles reading and sending text messages, channel posts, and threaded replies. Calls, meetings, file access, and starting new chats hand off to Teams. Presence, reactions, typing indicators, unread/read-state synchronization, and push notifications are not implemented. Messages and drafts are kept in memory for this session, without an offline Teams cache. Microsoft’s Teams chat/channel APIs do not support personal Microsoft accounts.
+
+API references: [chats](https://learn.microsoft.com/en-us/graph/api/chat-list?view=graph-rest-1.0), [sending messages](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0), [channel messages](https://learn.microsoft.com/en-us/graph/api/channel-list-messages?view=graph-rest-1.0).
 
 ## 2. AI
 
@@ -75,6 +94,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `n`, `e`, `#` | calendar: new event, edit, delete |
 | `i`, `[` / `]` | calendar: insights, move selected event a day |
 | `z`, `g z` | snooze, snoozed mail |
+| `g b` | open / close Connect beside mail and calendar |
 | `g j` | join the current / next meeting |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |

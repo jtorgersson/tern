@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Connect from "$lib/components/Connect.svelte";
+  import { connect } from "$lib/state/connect.svelte";
   import { app } from "$lib/state/app.svelte";
   import { handleKey } from "$lib/keys";
   import TopBar from "$lib/components/TopBar.svelte";
@@ -41,6 +43,23 @@
     document.documentElement.dataset.density = app.settings?.ui.density ?? "comfortable";
   });
 
+  function resizeConnect(e: PointerEvent) {
+    const startX = e.clientX;
+    const width = connect.width;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => connect.width = Math.max(360, Math.min(900, width + startX - ev.clientX));
+    const end = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", end);
+      el.removeEventListener("pointercancel", end);
+      connect.saveWidth();
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+
   function startResize(e: PointerEvent) {
     const startX = e.clientX;
     const start = listWidth;
@@ -81,21 +100,32 @@
 {:else}
   <div class="app">
     <TopBar />
-    <main style:--list-w="{listWidth}px" class:today={app.isCanvasView} class:no-pane={!app.isCanvasView && !app.readingPane}>
-      <Sidebar />
-      {#if app.view.kind === "today"}
-        <Today />
-      {:else if app.view.kind === "calendar"}
-        <Calendar />
-      {:else}
-        <MessageList />
-        {#if app.readingPane}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="resizer" onpointerdown={startResize}></div>
-          <Reader />
+    <div class="workspace-row" class:docked={connect.open} class:expanded={connect.open && connect.expanded}>
+      <main style:--list-w="{listWidth}px" class:today={app.isCanvasView} class:no-pane={!app.isCanvasView && !app.readingPane}>
+        <Sidebar />
+        {#if app.view.kind === "today"}
+          <Today />
+        {:else if app.view.kind === "calendar"}
+          <Calendar />
+        {:else}
+          <MessageList />
+          {#if app.readingPane}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="resizer" onpointerdown={startResize}></div>
+            <Reader />
+          {/if}
         {/if}
-      {/if}
-    </main>
+      </main>
+      <aside class="connect-dock" hidden={!connect.open} style:width="{connect.width}px">
+        {#if !connect.expanded}
+          <!-- ARIA window splitter: focusable separator supports arrow-key resizing. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="dock-resizer" role="separator" aria-label="Resize Connect" aria-orientation="vertical" aria-valuenow={connect.width} aria-valuemin={360} aria-valuemax={900} tabindex="0" onpointerdown={resizeConnect}
+            onkeydown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); connect.width = Math.max(360, Math.min(900, connect.width + (e.key === "ArrowLeft" ? 30 : -30))); connect.saveWidth(); } }}></div>
+        {/if}
+        <Connect />
+      </aside>
+    </div>
   </div>
   <AgentPanel />
   <Composer />
@@ -117,10 +147,19 @@
     display: flex;
     flex-direction: column;
   }
+  .workspace-row { flex: 1; min-height: 0; display: flex; overflow-x: auto; }
+  .docked main { min-width: 700px; }
+  .workspace-row.expanded main { display: none; }
+  .connect-dock { position: relative; flex: none; min-width: 360px; }
+  .connect-dock[hidden] { display: none; }
+  .expanded .connect-dock { flex: 1; }
+  .dock-resizer { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; z-index: 3; touch-action: none; }
+  .dock-resizer:hover, .dock-resizer:focus-visible { background: var(--accent-line); }
   main {
     position: relative;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: grid;
     grid-template-columns: 236px var(--list-w) 0 minmax(0, 1fr);
   }
@@ -146,24 +185,17 @@
     background: linear-gradient(90deg, transparent 2px, var(--accent-line) 2px, var(--accent-line) 4px, transparent 4px);
   }
   @media (max-width: 1100px) {
-    main {
-      grid-template-columns: 210px minmax(280px, 360px) 0 minmax(0, 1fr);
-    }
-    main.today,
-    main.no-pane {
-      grid-template-columns: 210px minmax(0, 1fr);
-    }
+    main { grid-template-columns: 210px minmax(280px, 360px) 0 minmax(0, 1fr); }
+    main.today, main.no-pane { grid-template-columns: 210px minmax(0, 1fr); }
+    .docked main { min-width: 400px; grid-template-columns: 0 minmax(180px, .8fr) 0 minmax(220px, 1fr); }
+    .docked main.today, .docked main.no-pane { grid-template-columns: minmax(0, 1fr); }
+    .docked main :global(.sidebar) { display: none; }
+    .docked:not(.expanded) .connect-dock { max-width: 45vw; }
   }
   @media (max-width: 820px) {
-    main {
-      grid-template-columns: 0 minmax(260px, 1fr) 0 minmax(0, 1.4fr);
-    }
-    main.no-pane {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    main :global(.sidebar) {
-      display: none;
-    }
+    main { grid-template-columns: 0 minmax(260px, 1fr) 0 minmax(0, 1.4fr); }
+    main.today, main.no-pane { grid-template-columns: minmax(0, 1fr); }
+    main :global(.sidebar) { display: none; }
   }
   .splash {
     position: fixed;

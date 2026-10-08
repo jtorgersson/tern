@@ -20,6 +20,7 @@ export interface Account {
   syncMail: boolean;
   /** The user allowed the shared-mailbox Graph scopes on this (own) account. */
   sharedConsent: boolean;
+  connectConsent: boolean;
 }
 
 export type WellKnownFolder =

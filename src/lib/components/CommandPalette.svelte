@@ -2,6 +2,7 @@
   import { app, CATEGORY_META, SMART_CATEGORIES, wkLabel, type UiView } from "$lib/state/app.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { agent } from "$lib/state/agent.svelte";
+  import { connect } from "$lib/state/connect.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
   import { fuzzyScore } from "$lib/util/fuzzy";
   import type { WellKnownFolder } from "$lib/types";
@@ -49,6 +50,7 @@
       { id: "settings-acc", label: "Settings: Add account", group: "App", run: () => app.openSettings("accounts") },
       { id: "settings-look", label: "Settings: Appearance", group: "App", run: () => app.openSettings("appearance") },
       { id: "keys", label: "Keyboard shortcuts", group: "App", hint: "?", run: () => (app.cheatsheetOpen = true) },
+      { id: "connect", label: connect.open ? "Close Connect" : "Open Connect beside mail and calendar", group: "App", hint: "g b", run: () => connect.toggle() },
       { id: "today", label: "Go to Today", group: "Go to", hint: "g t", run: go({ kind: "today" }) },
       { id: "calendar", label: "Go to Calendar", group: "Go to", hint: "g c", run: go({ kind: "calendar" }) },
       { id: "cal-day", label: "Calendar: Day view", group: "Go to", hint: "d", run: () => { app.setView({ kind: "calendar" }); calendar.setView("day"); } },

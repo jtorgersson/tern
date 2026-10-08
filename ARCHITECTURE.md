@@ -25,7 +25,7 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 
 ## Contract
 * `src/lib/types.ts` — every type crossing the boundary (Rust mirrors in `model.rs`, camelCase serde).
-* `src/lib/api.ts` — every command. Rust command names are the strings passed to `invoke`.
+* `src/lib/api.ts` — mail/calendar commands; `src/lib/connect.ts` — Connect commands and Graph response types. Rust command names are the strings passed to `invoke`.
 * Events: see `EVENTS` in types.ts.
 
 ## Storage
@@ -59,6 +59,16 @@ and the series' recurrence rule. Meeting mails are detected by
 `@odata.type` in delta and resolved on open via `GET /me/messages/{id}?$expand=microsoft.graph.eventMessage/event`;
 conflicts are computed from the cache. Free slots use `/me/calendar/getSchedule` (falls back to the own cache on personal
 accounts). A 30 s loop sends a desktop reminder `settings.calendar.reminderMinutes` before each meeting.
+
+## Connect (Microsoft Teams)
+
+`src-tauri/src/connect.rs` exposes `connect_enable`, `connect_list`, and `connect_send`. A tagged resource enum builds Graph v1.0 chat, joined-team, channel, message, and reply paths; IDs are encoded as path segments. Pagination is restricted to HTTPS on graph.microsoft.com and the requested resource. Sends use `graph::call_once` so ambiguous errors do not cause duplicate posts. Tokens stay in Rust.
+
+`accounts.connect_consent` is migrated with a false default. Enabling Connect requests delegated `Chat.Read ChatMessage.Send Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All ChannelMessage.Send` alongside existing mail/calendar (and previously granted shared) scopes. Consent checks the returned user and tenant against the selected account before saving credentials. Refreshes retain granted scopes; normal account addition still uses base mail/calendar scopes only. Shared mailboxes and personal Microsoft accounts cannot enable Connect.
+
+`Connect.svelte` owns the independently selected account, browser, conversation, thread, pagination, and in-memory drafts keyed by account and conversation. Request generations discard stale responses after navigation or account changes. Message HTML uses a small DOMPurify allowlist, remote images are omitted, and links open through the system opener with HTTPS validation. Drafts and conversation state survive hiding the dock because it stays mounted; polling pauses while hidden or when the document is not visible. The active conversation polls every 15 seconds and the list every 60 seconds. There is no Teams offline cache or Graph webhook subscription.
+
+`state/connect.svelte.ts` persists only dock visibility and width in localStorage. The dock occupies a sibling pane beside the existing mail/calendar grid; expanding it hides that grid without destroying it. Keyboard events from the dock are excluded from mail/calendar single-key actions. Toolbar, sidebar, command palette, and `g b` toggle the dock. Calls, attachments, and new-chat creation hand off to Teams.
 
 ## AI (src/lib/ai) — runs in the webview
 Providers: `anthropic` (official `@anthropic-ai/sdk`, default model `claude-opus-5-5`, `fallbacks: "default"`)

@@ -1,6 +1,7 @@
 // Global keyboard map. Single-key shortcuts are ignored while typing.
 import { app } from "$lib/state/app.svelte";
 import { composer } from "$lib/state/composer.svelte";
+import { connect } from "$lib/state/connect.svelte";
 import { calendar } from "$lib/state/calendar.svelte";
 
 export interface Shortcut {
@@ -15,6 +16,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "O / Shift Enter", label: "Open message in its own window", group: "Navigate" },
   { keys: "p", label: "Show / hide the reading pane", group: "App" },
   { keys: "g t", label: "Go to Today", group: "Navigate" },
+  { keys: "g b", label: "Toggle Connect beside mail / calendar", group: "Navigate" },
   { keys: "g c", label: "Go to Calendar", group: "Navigate" },
   { keys: "d / w / m / a / i", label: "Calendar: day / week / month / agenda / insights", group: "Navigate" },
   { keys: "[ / ]", label: "Calendar: move selected event a day back / forward", group: "Act" },
@@ -130,6 +132,11 @@ export function handleKey(e: KeyboardEvent) {
     app.syncNow();
     return;
   }
+  if (e.key === "Escape" && (e.target as HTMLElement | null)?.closest("[data-connect]")) {
+    (e.target as HTMLElement).blur?.();
+    pendingG = false;
+    return;
+  }
   if (e.key === "Escape") {
     if (app.snoozeTarget) app.snoozeTarget = null;
     else if (app.paletteOpen) app.paletteOpen = false;
@@ -153,6 +160,20 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
 
+  // Keep conversation keyboard input from acting on the mail/calendar pane behind it.
+  if ((e.target as HTMLElement | null)?.closest("[data-connect]") || (connect.open && connect.expanded)) {
+    if (isTyping(e) || mod || e.altKey || app.paletteOpen || app.settingsOpen) return;
+    if (pendingG) {
+      pendingG = false;
+      clearTimeout(gTimer);
+      if (e.key === "b") { e.preventDefault(); connect.toggle(); }
+    } else if (e.key === "g") {
+      pendingG = true;
+      gTimer = setTimeout(() => pendingG = false, 900);
+    }
+    return;
+  }
+
   // AltGr (Ctrl+Alt on Windows, Option on macOS) is how Nordic layouts type [ and ]: let those through.
   const altGrBracket = (e.key === "[" || e.key === "]") && (e.getModifierState?.("AltGraph") || (e.ctrlKey && e.altKey) || (e.altKey && !e.ctrlKey && !e.metaKey));
   if (isTyping(e) || ((mod || e.altKey) && !altGrBracket)) return;
@@ -168,6 +189,7 @@ export function handleKey(e: KeyboardEvent) {
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
       t: () => app.setView({ kind: "today" }),
       c: () => app.setView({ kind: "calendar" }),
+      b: () => connect.toggle(),
       z: () => app.setView({ kind: "snoozed" }),
       j: () => calendar.joinNext(),
       x: () => app.setView({ kind: "unified", wellKnown: "deleteditems" }),

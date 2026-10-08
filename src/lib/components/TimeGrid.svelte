@@ -682,4 +682,9 @@
     justify-content: flex-start;
     padding-left: 14px;
   }
+  @container calendar (max-width: 600px) {
+    .dh { flex-direction: column; align-items: center; gap: 2px; padding-inline: 0; }
+    .dow { font-size: 9px; letter-spacing: 0; }
+    .num { font-size: 15px; min-width: 22px; padding-inline: 2px; }
+  }
 </style>

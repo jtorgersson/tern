@@ -2,6 +2,8 @@
   import { app } from "$lib/state/app.svelte";
   import { composer } from "$lib/state/composer.svelte";
   import { Search, PenLine, Sparkles, Settings, RefreshCw, X } from "@lucide/svelte";
+  import { connect } from "$lib/state/connect.svelte";
+  import { MessageCircle } from "@lucide/svelte";
   import Logo from "./Logo.svelte";
   import NextUp from "./NextUp.svelte";
 
@@ -58,6 +60,7 @@
 
   <div class="right" data-tauri-drag-region>
     <NextUp />
+    <button class="icon-btn" class:on={connect.open} title="Connect beside mail and calendar (g b)" aria-label="Toggle Connect" aria-pressed={connect.open} onclick={() => connect.toggle()}><MessageCircle size={16} /></button>
     {#if app.triaging}
       <span class="status shimmer-text" title="AI is sorting new mail">Triaging…</span>
     {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Calendar canvas: toolbar (period navigation, view switch, quick add), left rail (mini month, calendars,
   // open invitations) and the active view (day / week / month / agenda).
+  import { connect } from "$lib/state/connect.svelte";
   import { app } from "$lib/state/app.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
   import { agent } from "$lib/state/agent.svelte";
@@ -69,6 +70,9 @@
   try {
     railOpen = localStorage.getItem("tern.calRail") !== "0";
   } catch {}
+  $effect(() => {
+    if (connect.open && !connect.expanded) railOpen = false;
+  });
   function toggleRail() {
     railOpen = !railOpen;
     try {
@@ -287,6 +291,8 @@
 
 <style>
   .cal {
+    container-type: inline-size;
+    container-name: calendar;
     min-height: 0;
     min-width: 0;
     display: flex;
@@ -353,6 +359,8 @@
     color: var(--accent);
   }
   .quick input {
+    border: 0;
+    outline: 0;
     flex: 1;
     min-width: 0;
     background: transparent;
@@ -598,20 +606,22 @@
     display: flex;
     flex-direction: column;
   }
-  @media (max-width: 1250px) {
-    .toolbar {
-      grid-template-columns: auto 1fr auto;
-    }
-    .qp {
-      display: none;
-    }
+  @container calendar (max-width: 1100px) {
+    .toolbar { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .nav { flex-wrap: wrap; }
+    .right { flex-wrap: wrap; }
+    .quick { grid-row: 3; }
+    .qp { max-width: 180px; }
   }
-  @media (max-width: 1050px) {
-    .quick {
-      display: none;
-    }
-    .toolbar {
-      grid-template-columns: 1fr auto;
-    }
+  @container calendar (max-width: 800px) {
+    .body { position: relative; grid-template-columns: minmax(0, 1fr); }
+    .rail { position: absolute; inset: 0 auto 0 0; width: 232px; z-index: 5; background: var(--surface); box-shadow: var(--shadow); }
+  }
+  @container calendar (max-width: 550px) {
+    .seg { margin-right: 0; }
+    .seg button { padding: 0 7px; }
+    .right { gap: 4px; }
+    h1 { font-size: 15px; }
+    .wk { display: none; }
   }
 </style>

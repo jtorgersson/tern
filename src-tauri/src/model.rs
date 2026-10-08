@@ -20,6 +20,8 @@ pub struct Account {
     pub sync_mail: bool,
     /// The user granted the `.Shared` Graph scopes (needed to open other mailboxes).
     pub shared_consent: bool,
+    /// Optional Microsoft Teams permissions for Connect.
+    pub connect_consent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

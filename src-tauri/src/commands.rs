@@ -101,6 +101,7 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             &client_id,
             &tenant,
             false,
+            false,
             None,
             rx,
             || progress(&app, "waiting_browser", None),
@@ -125,10 +126,15 @@ pub async fn account_add_microsoft(app: AppHandle, st: St<'_>) -> R<Account> {
             owner_id: None,
             sync_mail: true,
             shared_consent: existing.as_ref().is_some_and(|a| a.shared_consent),
+            connect_consent: existing.as_ref().is_some_and(|a| a.connect_consent),
         };
         secrets::set(&auth::refresh_key(&id), &sign_in.refresh_token)?;
         auth::cache_token(&st, &id, &sign_in.access_token);
         st.db.upsert_account(&account)?;
+        // A regular re-login only requested the base scopes. Refresh before using optional features.
+        if account.shared_consent || account.connect_consent {
+            st.tokens.lock().unwrap().remove(&id);
+        }
         anyhow::Ok(st.db.account(&id)?.unwrap_or(account))
     }
     .await;
@@ -187,6 +193,7 @@ pub async fn account_add_shared(app: AppHandle, st: St<'_>, owner_id: String, em
                 &settings::ms_client_id(&s),
                 &settings::ms_tenant(&s),
                 true,
+                owner.connect_consent,
                 Some(&owner.email),
                 rx,
                 || progress(&app, "waiting_browser", None),
@@ -227,6 +234,7 @@ pub async fn account_add_shared(app: AppHandle, st: St<'_>, owner_id: String, em
         owner_id: Some(owner.id.clone()),
         sync_mail: mail,
         shared_consent: false,
+        connect_consent: false,
     };
     st.db.upsert_account(&account).map_err(err)?;
     match graph::probe(&st, &id, mail).await {

@@ -97,13 +97,30 @@ async fn send_raw(
     }
 }
 
-async fn call(st: &AppState, account_id: &str, method: Method, url: &str, body: Option<&Value>) -> Result<Value> {
+pub(crate) async fn call(st: &AppState, account_id: &str, method: Method, url: &str, body: Option<&Value>) -> Result<Value> {
     let resp = send_raw(st, account_id, method, url, body, None).await?;
     let text = resp.text().await?;
     if text.trim().is_empty() {
         return Ok(Value::Null);
     }
     Ok(serde_json::from_str(&text)?)
+}
+
+/// Sends a chat message once. An uncertain delivery must be resolved by refreshing the conversation.
+pub(crate) async fn call_once(st: &AppState, account_id: &str, path: &str, body: &Value) -> Result<Value> {
+    let token = auth::access_token(st, account_id).await?;
+    let resp = st.http.post(format!("{BASE}{path}")).bearer_auth(token).json(body).send().await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Err(GraphError {
+            status: status.as_u16(),
+            code: v.pointer("/error/code").and_then(Value::as_str).unwrap_or("").into(),
+            message: v.pointer("/error/message").and_then(Value::as_str).unwrap_or(&text).into(),
+        }.into());
+    }
+    Ok(v)
 }
 
 /// Used during sign-in, before the account exists.

@@ -1,6 +1,7 @@
 mod auth;
 mod calendar;
 mod commands;
+mod connect;
 mod db;
 mod graph;
 mod model;
@@ -46,6 +47,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            connect::connect_enable,
+            connect::connect_list,
+            connect::connect_send,
             commands::app_bootstrap,
             commands::theme_get,
             commands::settings_get,
