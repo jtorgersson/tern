@@ -8,6 +8,7 @@
 
   let { message, thread }: { message: MessageFull; thread: MessageFull[] } = $props();
   let instruction = $state("");
+  let aiOpen = $state(false);
 
   const CHIPS = [
     { label: "Accept", text: "Accept / agree, warmly and briefly." },
@@ -34,10 +35,10 @@
 </script>
 
 <div class="qr">
-  {#if app.aiReady && message.ai?.needsReply && (message.ai.suggestedReply || message.ai.category === "needs_reply")}
+  {#if aiOpen && app.aiReady && message.ai?.needsReply && (message.ai.suggestedReply || message.ai.category === "needs_reply")}
     <DraftCard {message} />
   {/if}
-  {#if app.aiReady}
+  {#if aiOpen && app.aiReady}
     <form class="ask" onsubmit={submit}>
       <Sparkles size={14} />
       <input bind:value={instruction} placeholder="Tell Tern what to reply…  e.g. “yes to Thursday, ask for the agenda”" />
@@ -53,6 +54,9 @@
     <button class="btn" onclick={() => composer.reply(message, "reply")}><Reply size={14} /> Reply <kbd>r</kbd></button>
     <button class="btn" onclick={() => composer.reply(message, "replyAll")}><ReplyAll size={14} /> Reply all <kbd>R</kbd></button>
     <button class="btn" onclick={() => composer.reply(message, "forward")}><Forward size={14} /> Forward <kbd>f</kbd></button>
+    {#if app.aiReady}
+      <button class="btn ghost hintbtn" aria-expanded={aiOpen} onclick={() => aiOpen = !aiOpen}><Sparkles size={13} /> {aiOpen ? "Hide writing assistant" : "Draft with AI"}</button>
+    {/if}
     {#if !app.aiReady}
       <button class="btn ghost hintbtn" onclick={() => app.openSettings("ai")}><Sparkles size={13} /> Set up AI to draft replies</button>
     {/if}

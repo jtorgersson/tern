@@ -338,7 +338,7 @@ async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
     Ok(MessageFull {
         cc: st.db.cc_of(id)?,
         web_link: st.db.web_link(id)?,
-        summary,
+        summary: st.db.summary(id)?.unwrap_or(summary),
         bcc: body.bcc,
         reply_to: body.reply_to,
         body_html: body.html,
@@ -351,6 +351,14 @@ async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
 #[tauri::command]
 pub async fn message_get(st: St<'_>, id: String) -> R<MessageFull> {
     load_full(&st, &id).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn message_refresh_status(st: St<'_>, id: String) -> R<MessageSummary> {
+    let account_id = account_of(&st, &id)?;
+    let (replied, forwarded) = graph::response_status(&st, &account_id, &id).await.map_err(err)?;
+    st.db.record_response(&id, replied, forwarded).map_err(err)?;
+    st.db.summary(&id).map_err(err)?.ok_or_else(|| "Message no longer cached".into())
 }
 
 #[tauri::command]
@@ -478,7 +486,7 @@ pub async fn messages_delete(app: AppHandle, st: St<'_>, ids: Vec<String>) -> R<
 }
 
 #[tauri::command]
-pub async fn message_send(st: St<'_>, message: OutgoingMessage) -> R<()> {
+pub async fn message_send(app: AppHandle, st: St<'_>, message: OutgoingMessage) -> R<()> {
     let is_reply = message.mode == "reply" || message.mode == "replyAll";
     if !is_reply && message.to.is_empty() && message.cc.is_empty() && message.bcc.is_empty() {
         return Err("Add at least one recipient".into());
@@ -491,6 +499,15 @@ pub async fn message_send(st: St<'_>, message: OutgoingMessage) -> R<()> {
     }
     let r = if message.mode == "new" { graph::send_new(&st, &message).await } else { graph::send_response(&st, &message).await };
     r.map_err(|e| format!("{e:#}"))?;
+    if message.send_at.is_none() {
+        if let Some(id) = &message.ref_message_id {
+            // Sending already succeeded. A cache failure must not invite a duplicate send.
+            if let Err(e) = st.db.record_response(id, is_reply, message.mode == "forward") {
+                log::warn!("could not cache response status: {e:#}");
+            }
+            changed(&app, &message.account_id);
+        }
+    }
     let st2 = st.inner().clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;

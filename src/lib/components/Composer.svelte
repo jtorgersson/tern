@@ -5,6 +5,7 @@
   import { htmlToText } from "$lib/util/misc";
   import { hueColor } from "$lib/theme";
   import AddressInput from "./AddressInput.svelte";
+  import EmojiPicker from "./EmojiPicker.svelte";
   import {
     X,
     Minus,
@@ -27,6 +28,26 @@
   let big = $state(false);
   let aiText = $state("");
   let showQuote = $state(false);
+  let emojiRange: Range | null = null;
+
+  function rememberCaret() {
+    const selection = window.getSelection();
+    if (editor && selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      emojiRange = selection.getRangeAt(0).cloneRange();
+    }
+  }
+  function addEmoji(emoji: string) {
+    if (!editor || composer.aiBusy) return;
+    editor.focus();
+    const selection = window.getSelection();
+    const range = emojiRange && editor.contains(emojiRange.commonAncestorContainer) ? emojiRange : document.createRange();
+    if (range !== emojiRange) { range.selectNodeContents(editor); range.collapse(false); }
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand("insertText", false, emoji);
+    oninput();
+    rememberCaret();
+  }
 
   const d = $derived(composer.draft);
   const title = $derived(
@@ -199,6 +220,9 @@
           aria-multiline="true"
           tabindex="0"
           data-placeholder={app.aiReady ? "Write, or tell Tern what to say below…" : "Write your message…"}
+          onkeyup={rememberCaret}
+          onmouseup={rememberCaret}
+          onfocusout={rememberCaret}
           {oninput}></div>
 
         {#if app.settings?.signatures?.[d.accountId]}
@@ -249,6 +273,7 @@
           {/if}
         </div>
         <div class="fmt">
+          <EmojiPicker onOpen={rememberCaret} onSelect={addEmoji} disabled={composer.aiBusy} />
           <button class="icon-btn s" title="Bold" onclick={() => exec("bold")}><Bold size={14} /></button>
           <button class="icon-btn s" title="Italic" onclick={() => exec("italic")}><Italic size={14} /></button>
           <button class="icon-btn s" title="Underline" onclick={() => exec("underline")}><Underline size={14} /></button>

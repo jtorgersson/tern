@@ -28,10 +28,27 @@ export interface ConnectChat {
   chatType: string;
   webUrl?: string;
   members?: { userId: string; displayName: string; email?: string }[];
-  lastMessagePreview?: { body?: { content: string }; createdDateTime?: string } | null;
+  lastMessagePreview?: { body?: { content: string }; createdDateTime?: string; from?: ConnectMessage["from"] } | null;
+  viewpoint?: { lastMessageReadDateTime?: string | null; isHidden?: boolean } | null;
 }
 export interface ConnectGroup { id: string; displayName: string; webUrl?: string }
 export interface Conversation { title: string; resource: ConnectResource; webUrl?: string; members?: ConnectChat["members"] }
+
+/** Compare instants, not ISO strings: Graph and local cursors can use different offsets. */
+export function readCursor(...dates: (string | null | undefined)[]): number {
+  return Math.max(0, ...dates.map(d => d ? Date.parse(d) || 0 : 0));
+}
+export function chatUnread(chat: ConnectChat, accountId: string, localRead?: string): boolean {
+  const preview = chat.lastMessagePreview;
+  if (!preview?.createdDateTime || `ms-${preview.from?.user?.id}` === accountId) return false;
+  // Without either cursor the read state is unknown, rather than automatically unread.
+  if (!localRead && !chat.viewpoint?.lastMessageReadDateTime) return false;
+  return readCursor(preview.createdDateTime) > readCursor(localRead, chat.viewpoint?.lastMessageReadDateTime);
+}
+export function unreadMessages(messages: ConnectMessage[], accountId: string, cursor: number): ConnectMessage[] {
+  return messages.filter(m => !m.deletedDateTime && m.messageType !== "systemEventMessage" &&
+    `ms-${m.from?.user?.id}` !== accountId && readCursor(m.createdDateTime) > cursor);
+}
 
 export const connectApi = {
   people: (accountId: string, query: string) => invoke<GraphPage<ConnectPerson>>("connect_people", { accountId, query }),

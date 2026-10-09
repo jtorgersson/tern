@@ -436,6 +436,10 @@ class AppState {
       }
       if (seq !== this.loadSeq) return;
       this.messages = list;
+      if (this.open) {
+        const status = list.find(m => m.id === this.open?.id);
+        if (status) this.patchLocal([status.id], { isReplied: status.isReplied, isForwarded: status.isForwarded });
+      }
       if (!keepSelection || !list.some((m) => m.id === this.selectedId)) {
         this.selectedId = list[0]?.id ?? null;
         if (!keepSelection) {
@@ -607,6 +611,7 @@ class AppState {
       if (seq !== this.openSeq) return;
       this.open = msg;
       this.thread = [msg];
+      void this.refreshResponse(id);
       if (!msg.isRead) this.setRead([id], true, true);
       api
         .thread(id)
@@ -631,6 +636,20 @@ class AppState {
     const set = new Set(ids);
     this.messages = this.messages.map((m) => (set.has(m.id) ? { ...m, ...patch } : m));
     if (this.open && set.has(this.open.id)) this.open = { ...this.open, ...patch };
+    this.thread = this.thread.map(m => set.has(m.id) ? { ...m, ...patch } : m);
+  }
+
+  recordResponse(id: string, mode: "reply" | "replyAll" | "forward") {
+    this.patchLocal([id], mode === "forward" ? { isForwarded: true } : { isReplied: true });
+  }
+
+  async refreshResponse(id: string) {
+    try {
+      const status = await api.messageStatus(id);
+      this.patchLocal([id], { isReplied: status.isReplied, isForwarded: status.isForwarded });
+    } catch {
+      // Reading cached mail stays available offline; sync will retry the metadata.
+    }
   }
 
   async setRead(ids: string[], read: boolean, silent = false) {

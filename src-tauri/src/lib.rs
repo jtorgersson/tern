@@ -69,6 +69,7 @@ pub fn run() {
             commands::folders_list,
             commands::messages_list,
             commands::message_get,
+            commands::message_refresh_status,
             commands::thread_get,
             commands::messages_set_read,
             commands::messages_set_flag,

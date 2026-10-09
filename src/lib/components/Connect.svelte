@@ -6,7 +6,7 @@
   import { app } from "$lib/state/app.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { api } from "$lib/api";
-  import { connectApi, chatTitle, mergeMessages, previewText, type GraphPage, type ConnectResource, type ConnectChat, type ConnectGroup, type ConnectMessage, type Conversation } from "$lib/connect";
+  import { connectApi, chatTitle, chatUnread, readCursor, unreadMessages, mergeMessages, previewText, type GraphPage, type ConnectResource, type ConnectChat, type ConnectGroup, type ConnectMessage, type Conversation } from "$lib/connect";
   import { errMsg, textToHtml } from "$lib/util/misc";
   import { conversationText } from "$lib/connect";
   import { composer } from "$lib/state/composer.svelte";
@@ -15,6 +15,8 @@
   import { toasts } from "$lib/state/toasts.svelte";
   import NewConversation from "./NewConversation.svelte";
   import ConnectAssistant from "./ConnectAssistant.svelte";
+  import EmojiPicker from "./EmojiPicker.svelte";
+  import { insertEmoji } from "$lib/util/emoji";
 
   let accountId = $state("");
   const account = $derived(app.ownAccounts.find(a => a.id === accountId));
@@ -34,6 +36,8 @@
   let listLoading = $state(false);
   let listError = $state("");
   let filter = $state("");
+  let unreadOnly = $state(false);
+  let entryCursor = $state<number | null>(null);
   let active = $state<Conversation | null>(null);
   let parent = $state<Conversation | null>(null);
   let rootMessage = $state<ConnectMessage | null>(null);
@@ -46,12 +50,48 @@
   let sending = $state(false);
   let drafts = $state<Record<string, string>>({});
   let scroller: HTMLDivElement | undefined = $state();
+  let messageEditor: HTMLTextAreaElement | undefined = $state();
   let listSeq = 0;
   let messageSeq = 0;
   let accountEpoch = 0;
   const draftKey = $derived(`${accountId}:${JSON.stringify(active?.resource)}`);
   const draft = $derived(drafts[draftKey] ?? "");
-  const visibleRows = $derived(rows.filter(r => rowTitle(r).toLowerCase().includes(filter.toLowerCase())));
+  const unreadCount = $derived(rows.filter(rowUnread).length);
+  const visibleRows = $derived(rows.filter(r => rowTitle(r).toLowerCase().includes(filter.toLowerCase()) && (!unreadOnly || listing.kind !== "chats" || rowUnread(r))));
+  const firstUnread = $derived(entryCursor === null ? undefined : unreadMessages(messages, accountId, entryCursor)[0]);
+  const pending = $derived(active ? unreadMessages(messages, accountId, Math.max(currentCursor(active.resource), entryCursor ?? 0)) : []);
+
+  function receipt(resource: ConnectResource) {
+    const row = resource.kind === "chat" ? rows.find(r => r.id === resource.chatId && "chatType" in r) as ConnectChat | undefined : undefined;
+    return row?.viewpoint?.lastMessageReadDateTime;
+  }
+  function currentCursor(resource: ConnectResource) {
+    return readCursor(connect.read[connect.readKey(accountId, resource)], receipt(resource));
+  }
+  function rowUnread(row: ConnectChat | ConnectGroup) {
+    return "chatType" in row && chatUnread(row, accountId, connect.read[connect.readKey(accountId, { kind: "chat", chatId: row.id })]);
+  }
+  function atBottom() {
+    return !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  }
+  function readVisible() {
+    if (!active || messageLoading || !connect.open || document.visibilityState !== "visible" || !atBottom()) return;
+    const last = messages[messages.length - 1];
+    if (last) connect.markRead(accountId, active.resource, last.createdDateTime);
+  }
+  function jumpToLatest() {
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    readVisible();
+  }
+  async function addEmoji(emoji: string) {
+    const key = draftKey;
+    const inserted = insertEmoji(draft, emoji, messageEditor?.selectionStart, messageEditor?.selectionEnd, 20000);
+    drafts[key] = inserted.value;
+    await tick();
+    if (key !== draftKey) return;
+    messageEditor?.focus();
+    messageEditor?.setSelectionRange(inserted.caret, inserted.caret);
+  }
 
   $effect(() => {
     if (!app.ownAccounts.some(a => a.id === accountId)) accountId = app.ownAccounts[0]?.id ?? "";
@@ -73,6 +113,8 @@
     messageLoading = olderLoading = false;
     consentError = listError = messageError = sendError = "";
     filter = "";
+    unreadOnly = false;
+    entryCursor = null;
     if (id && enabled) void loadList({ kind: "chats" });
   });
   $effect(() => {
@@ -183,6 +225,8 @@
   function select(conversation: Conversation, messageId?: string) {
     highlighted = messageId ?? null;
     active = conversation;
+    const known = connect.read[connect.readKey(accountId, conversation.resource)] || receipt(conversation.resource);
+    entryCursor = known ? currentCursor(conversation.resource) : null;
     messages = [];
     messageNext = null;
     messageError = sendError = "";
@@ -224,17 +268,19 @@
       }
       if (seq !== messageSeq || id !== accountId) return;
       messages = mergeMessages(silent ? messages : [], page.value);
+      if (entryCursor === null) entryCursor = readCursor(messages[messages.length - 1]?.createdDateTime);
       if (!silent) messageNext = page["@odata.nextLink"] ?? null;
       messageError = "";
       if (!silent || nearBottom) {
         await tick();
         if (seq === messageSeq && scroller) {
           if (messageId) scroller.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center" });
+          else if (!silent && firstUnread) scroller.querySelector(".unread-divider")?.scrollIntoView({ block: "start" });
           else scroller.scrollTop = scroller.scrollHeight;
         }
       }
     } catch (e) { if (seq === messageSeq) messageError = errMsg(e); }
-    finally { if (seq === messageSeq) messageLoading = false; }
+    finally { if (seq === messageSeq) { messageLoading = false; readVisible(); } }
   }
   async function older() {
     if (!active || !messageNext || olderLoading || messageLoading) return;
@@ -273,7 +319,7 @@
       if (epoch === accountEpoch && key === draftKey) {
         messages = mergeMessages(messages, [sent]);
         await tick();
-        if (key === draftKey && scroller) scroller.scrollTop = scroller.scrollHeight;
+        if (key === draftKey && scroller) { scroller.scrollTop = scroller.scrollHeight; readVisible(); }
       }
     } catch (e) {
       if (epoch === accountEpoch && key === draftKey) sendError = `${errMsg(e)} Check the conversation before trying again; delivery may be uncertain.`;
@@ -303,6 +349,8 @@
   }
 </script>
 
+<svelte:document onvisibilitychange={readVisible} />
+<svelte:window onfocus={readVisible} />
 <section class="connect" data-connect aria-label="Connect workspace">
   <header class="heading">
     <MessageCircle size={19} />
@@ -345,17 +393,24 @@
         </div>
         {#if listing.kind === "channels"}<button class="group-back" onclick={() => loadList({ kind: "teams" })}><ArrowLeft size={13} />{groupTitle}</button>{/if}
         <input class="filter" aria-label="Filter loaded conversations" placeholder="Find a conversation…" bind:value={filter} />
+        {#if listing.kind === "chats"}
+          <div class="read-filters" aria-label="Conversation read status">
+            <button class:chosen={!unreadOnly} aria-pressed={!unreadOnly} onclick={() => unreadOnly = false}>All</button>
+            <button class:chosen={unreadOnly} aria-pressed={unreadOnly} onclick={() => unreadOnly = true}>Unread{#if unreadCount}<span class="badge">{unreadCount}</span>{/if}</button>
+          </div>
+        {/if}
         {#if listError}<p class="error" role="alert">{listError}</p>{/if}
         <div class="conversations">
           {#each visibleRows as row (row.id)}
             {@const selected = active?.resource.kind === "chat" ? active.resource.chatId === row.id : active?.resource.kind === "channel" ? active.resource.channelId === row.id : false}
-            <button class="conversation" class:selected onclick={() => choose(row)}>
+            <button class="conversation" class:selected class:unread={rowUnread(row)} aria-label={`${rowTitle(row)}${rowUnread(row) ? ", unread" : ""}`} onclick={() => choose(row)}>
               <span class="conversation-icon">{#if "chatType" in row}<MessageCircle size={16} />{:else}<Hash size={16} />{/if}</span>
               <span class="conversation-copy"><strong>{rowTitle(row)}</strong>
                 {#if "chatType" in row}<small>{previewText(row.lastMessagePreview?.body?.content || "") || (row.chatType === "meeting" ? "Meeting chat" : "Open conversation")}</small>{/if}
               </span>
+              {#if rowUnread(row)}<span class="unread-dot" title="Unread messages" aria-label="Unread messages"></span>{/if}
             </button>
-          {:else}<p class="empty">{listLoading ? "Loading conversations…" : filter ? "No matching conversations." : listError ? "Conversations couldn’t be loaded." : listing.kind === "teams" ? "No joined teams found." : "No conversations found."}</p>{/each}
+          {:else}<p class="empty">{listLoading ? "Loading conversations…" : filter ? "No matching conversations." : listError ? "Conversations couldn’t be loaded." : unreadOnly && listing.kind === "chats" ? "You’re caught up on loaded chats." : listing.kind === "teams" ? "No joined teams found." : "No conversations found."}</p>{/each}
           {#if listNext}<button class="load-more" disabled={listLoading} onclick={() => loadList(listing, true)}>Load more conversations</button>{/if}
         </div>
       </div>
@@ -374,10 +429,11 @@
           </div>
           {#if messageError}<p class="error" role="alert">{messageError}</p>{/if}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-          <div class="messages" bind:this={scroller} onclick={bodyLink}>
+          <div class="messages" bind:this={scroller} onclick={bodyLink} onscroll={readVisible}>
             {#if rootMessage}<div class="thread-root"><strong>{rootMessage.from?.user?.displayName || "Channel post"}</strong><p>{previewText(rootMessage.body.content)}</p></div>{/if}
             {#if messageNext}<button class="load-more" disabled={olderLoading || messageLoading} onclick={older}>{olderLoading ? "Loading…" : "Load more messages"}</button>{/if}
             {#each messages as message (message.id)}
+              {#if message.id === firstUnread?.id}<div class="unread-divider" role="separator" aria-label="New messages"><span>New messages</span></div>{/if}
               <article class="message" data-message-id={message.id} class:highlighted={message.id === highlighted} class:mine={`ms-${message.from?.user?.id}` === accountId}>
                 <div class="message-meta"><strong>{message.from?.user?.displayName || message.from?.application?.displayName || "Teams"}</strong><time datetime={message.createdDateTime}>{when(message.createdDateTime)}</time></div>
                 {#if message.deletedDateTime}<p class="deleted">Message deleted</p>
@@ -393,14 +449,15 @@
               </article>
             {:else}<p class="empty">{messageLoading ? "Loading messages…" : messageError ? "Messages couldn’t be loaded." : "No messages yet. Start the conversation below."}</p>{/each}
           </div>
+          {#if pending.length && !messageLoading}<button class="new-messages" type="button" onclick={jumpToLatest}>{pending.length} new {pending.length === 1 ? "message" : "messages"} · Jump to latest ↓</button>{/if}
           <form class="compose" onsubmit={(e) => { e.preventDefault(); void send(); }}>
             {#key draftKey}
               <ConnectAssistant {account} conversation={active} messages={rootMessage ? [rootMessage, ...messages] : messages} {draft} onUse={(text) => drafts[draftKey] = text} onPlan={planMeeting} />
             {/key}
             {#if sendError}<p class="error" role="alert">{sendError}</p>{/if}
-            <textarea aria-label="Message" placeholder={active.resource.kind === "channel" ? "Start a new channel post…" : "Write a message…"} value={draft} oninput={(e) => drafts[draftKey] = e.currentTarget.value} rows="3" maxlength="20000"
+            <textarea bind:this={messageEditor} aria-label="Message" placeholder={active.resource.kind === "channel" ? "Start a new channel post…" : "Write a message…"} value={draft} oninput={(e) => drafts[draftKey] = e.currentTarget.value} rows="3" maxlength="20000"
               onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void send(); } }}></textarea>
-            <div class="compose-footer"><span>Ctrl + Enter to send · Updates every 15s</span><button class="btn primary" disabled={!draft.trim() || sending} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
+            <div class="compose-footer"><EmojiPicker onSelect={addEmoji} /><span>Ctrl + Enter to send</span><button class="btn primary" disabled={!draft.trim() || sending} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
           </form>
         {:else}<div class="empty-state"><MessageCircle size={32} /><h3>Keep the conversation close</h3><p>Choose a chat or channel. Your mail and calendar stay right beside it.</p><button class="btn primary" onclick={() => startNew()}><Plus size={13} /> New conversation</button></div>{/if}
       </div>
@@ -434,7 +491,16 @@
   .conversation:hover { background: var(--panel); }
   .conversation.selected { background: var(--accent-soft); }
   .conversation-icon { color: var(--muted); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--panel); flex: none; }
-  .conversation-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
+  .conversation-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; flex: 1; }
+  .conversation.unread .conversation-copy strong { color: var(--fg-bright); font-weight: 700; }
+  .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .read-filters { display: flex; gap: 5px; padding: 0 14px 8px; }
+  .read-filters button { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 11px; color: var(--muted); }
+  .read-filters .chosen { background: var(--accent-soft); color: var(--accent); }
+  .badge { font-size: 10px; font-weight: 600; }
+  .unread-divider { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 10px; margin: 0 0 16px; scroll-margin-top: 12px; }
+  .unread-divider::before, .unread-divider::after { content: ""; height: 1px; flex: 1; background: var(--accent-line); }
+  .new-messages { align-self: center; margin: 0 12px 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
   .conversation-copy strong { font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conversation-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-back { display: flex; align-items: center; gap: 6px; padding: 0 16px 9px; font-size: 12px; color: var(--muted); }
@@ -464,6 +530,7 @@
   textarea:focus { outline: 1px solid var(--accent); }
   .compose-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
   .compose-footer span { font-size: 10px; color: var(--muted); }
+  .compose-footer .primary { margin-left: auto; }
   .text-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 11px; padding: 6px 0; }
   .message .text-btn { display: flex; margin-top: 4px; }
   .load-more { display: block; color: var(--accent); font-size: 11px; padding: 10px; margin: auto; }

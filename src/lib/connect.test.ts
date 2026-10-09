@@ -1,5 +1,30 @@
 import { expect, test } from "bun:test";
-import { chatTitle, mergeMessages, type ConnectMessage } from "./connect";
+import { chatTitle, chatUnread, readCursor, unreadMessages, mergeMessages, type ConnectMessage } from "./connect";
+
+test("unread chats combine Teams receipts with Tern reading and compare real instants", () => {
+  const chat = { id: "c", topic: null, chatType: "oneOnOne",
+    viewpoint: { lastMessageReadDateTime: "2026-10-09T10:00:00Z" },
+    lastMessagePreview: { createdDateTime: "2026-10-09T12:05:00+02:00", from: { user: { id: "other", displayName: "Alex" } } },
+  };
+  expect(chatUnread(chat, "ms-me")).toBe(true);
+  expect(chatUnread(chat, "ms-me", "2026-10-09T10:05:00Z")).toBe(false);
+  expect(chatUnread(chat, "ms-me", "2026-10-09T09:00:00Z")).toBe(true);
+  expect(chatUnread({ ...chat, viewpoint: { lastMessageReadDateTime: "2026-10-09T10:06:00Z" } }, "ms-me", "2026-10-09T10:05:00Z")).toBe(false);
+  expect(chatUnread(chat, "ms-other")).toBe(false);
+  expect(chatUnread({ ...chat, viewpoint: undefined }, "ms-me")).toBe(false);
+  expect(chatUnread({ ...chat, lastMessagePreview: null }, "ms-me")).toBe(false);
+  expect(readCursor("invalid", null, "2026-10-09T10:00:00Z")).toBe(Date.parse("2026-10-09T10:00:00Z"));
+});
+
+test("new-message boundaries exclude my sends, deleted messages, and system events", () => {
+  const message = (id: string, user: string, at: string): ConnectMessage => ({ id, from: { user: { id: user, displayName: user } }, createdDateTime: at, body: { contentType: "text", content: id } });
+  const messages = [message("read", "other", "2026-10-09T10:00:00Z"),
+    message("mine", "me", "2026-10-09T10:01:00Z"),
+    { ...message("deleted", "other", "2026-10-09T10:02:00Z"), deletedDateTime: "2026-10-09T10:03:00Z" },
+    { ...message("activity", "other", "2026-10-09T10:03:00Z"), messageType: "systemEventMessage" },
+    message("new", "other", "2026-10-09T12:04:00+02:00")];
+  expect(unreadMessages(messages, "ms-me", readCursor("2026-10-09T10:00:00Z")).map(m => m.id)).toEqual(["new"]);
+});
 
 test("chat names prefer the topic and exclude the current user from unnamed chats", () => {
   const chat = { id: "c", topic: null, chatType: "oneOnOne", members: [

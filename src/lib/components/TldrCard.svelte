@@ -6,11 +6,12 @@
   import { md, mdLinkHandler } from "$lib/util/markdown";
   import { errMsg } from "$lib/util/misc";
   import type { MessageFull } from "$lib/types";
-  import { Sparkles, LoaderCircle, RotateCcw, CircleCheck } from "@lucide/svelte";
+  import { Sparkles, LoaderCircle, RotateCcw, CircleCheck, X } from "@lucide/svelte";
 
   let { thread, message }: { thread: MessageFull[]; message: MessageFull } = $props();
 
   let text = $state("");
+  let visible = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let ctrl: AbortController | null = null;
@@ -20,6 +21,7 @@
 
   async function run() {
     if (!app.aiReady || busy) return;
+    visible = true;
     ctrl?.abort();
     ctrl = new AbortController();
     const mine = ctrl;
@@ -38,18 +40,17 @@
     }
   }
 
-  // Auto-summarize long threads once.
-  let autoFor = "";
-  $effect(() => {
-    const key = message.id + ":" + thread.length;
-    if (app.aiReady && thread.length >= 3 && autoFor !== key && !text) {
-      autoFor = key;
-      run();
-    }
-  });
+  function show() {
+    visible = true;
+    if (!text && !busy && app.aiReady) void run();
+  }
+  function hide() {
+    visible = false;
+    if (busy) { ctrl?.abort(); busy = false; text = ""; }
+  }
 
   $effect(() => {
-    const h = () => run();
+    const h = () => show();
     readerBus.addEventListener("summarize", h);
     return () => {
       readerBus.removeEventListener("summarize", h);
@@ -59,7 +60,12 @@
 </script>
 
 {#if note || text || busy || error || app.aiReady}
-  <div class="tldr" class:active={busy || text}>
+  <div class="tldr" class:active={visible}>
+    {#if !visible}
+      <button class="summary-toggle" onclick={show} aria-expanded="false" title="Summarize thread (t)">
+        <Sparkles size={13} /> {app.aiReady ? (thread.length > 1 ? "Summarize thread" : "Summarize email") : "Email insights"}<kbd>t</kbd>
+      </button>
+    {:else}
     <div class="head">
       <span class="spark"><Sparkles size={13} /></span>
       <span class="eyebrow">{text || busy ? "Thread summary" : "Tern"}</span>
@@ -76,6 +82,7 @@
           {#if text}<RotateCcw size={12} /> Again{:else}Summarize{#if thread.length > 1} thread{/if} <kbd>t</kbd>{/if}
         </button>
       {/if}
+      <button class="icon-btn" onclick={hide} title="Hide summary" aria-label="Hide summary" aria-expanded="true"><X size={13} /></button>
     </div>
 
     {#if text}
@@ -94,10 +101,15 @@
       {/if}
     {/if}
     {#if error}<div class="err">{error}</div>{/if}
+    {/if}
   </div>
 {/if}
 
 <style>
+  .summary-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 12px; padding: 8px 0; }
+  .summary-toggle kbd { font-size: 10px; color: var(--muted); }
+  .tldr:not(.active) { padding: 0; background: none; box-shadow: none; margin: 12px 0 0; animation: none; }
+  .tldr.active { margin-top: 18px; }
   .tldr {
     position: relative;
     margin: 0 0 18px;

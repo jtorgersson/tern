@@ -202,6 +202,7 @@ class Composer {
       toasts.update(id, { action: undefined });
       try {
         await api.send(out);
+        if (!at && out.refMessageId && out.mode !== "new") app.recordResponse(out.refMessageId, out.mode);
         toasts.update(id, { kind: "success", text: at ? `Scheduled — Outlook will send it ${when}` : "Sent", timeout: at ? 5000 : 2500 });
         app.scheduleRefresh();
         if (out.refMessageId && (out.mode === "reply" || out.mode === "replyAll")) {

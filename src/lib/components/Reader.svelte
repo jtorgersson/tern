@@ -17,6 +17,7 @@
   import InviteCard from "./InviteCard.svelte";
   import DateChips from "./DateChips.svelte";
   import Logo from "./Logo.svelte";
+  import MessageStatus from "./MessageStatus.svelte";
   import {
     Archive,
     Trash2,
@@ -33,6 +34,7 @@
     MailX,
     SquareArrowOutUpRight,
     X,
+    ChevronUp,
   } from "@lucide/svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { parseMailto } from "$lib/util/mailto";
@@ -93,16 +95,17 @@
   });
 
   let expanded = $state<Set<string>>(new Set());
+  const openedId = $derived(m?.id);
   $effect(() => {
-    // Expand the opened message and the latest one whenever the thread changes.
-    const last = thread[thread.length - 1];
-    expanded = new Set([m?.id ?? "", last?.id ?? ""]);
+    void openedId;
+    expanded = new Set();
   });
+  const associated = $derived(thread.filter(t => t.id !== m?.id));
 
   function toggle(id: string) {
     const s = new Set(expanded);
     if (s.has(id)) s.delete(id);
-    else s.add(id);
+    else { s.add(id); void app.refreshResponse(id); }
     expanded = s;
   }
 
@@ -135,6 +138,47 @@
     }
   }
 </script>
+
+{#snippet email(t: MessageFull, primary = false)}
+  <div class="msg">
+    <header class="msg-head">
+      <Avatar addr={t.from} size={38} />
+      <div class="who">
+        <div class="line">
+          <span class="name">{displayName(t.from)}</span>
+          <span class="email">{t.from.email}</span>
+        </div>
+        <div class="line sub">
+          <span>to {addrList(t.to) || "—"}</span>
+          {#if t.cc.length}<span>· cc {addrList(t.cc)}</span>{/if}
+        </div>
+      </div>
+      <time class="mono">{longTime(t.receivedAt)}</time>
+      {#if !primary}<button class="icon-btn" aria-label="Collapse related email" onclick={() => toggle(t.id)}><ChevronUp size={14} /></button>{/if}
+    </header>
+
+    <div class="message-status"><MessageStatus message={t} /></div>
+    <div class="content">
+      <MailFrame html={t.bodyHtml} />
+    </div>
+    {#if !t.meetingType || t.meetingType === "none"}
+      <DateChips message={t} />
+    {/if}
+
+    {#if t.attachments.some((a) => !a.isInline)}
+      <div class="atts">
+        {#each t.attachments.filter((a) => !a.isInline) as a (a.id)}
+          <button class="att" onclick={() => save(t, a)} title="Save to Downloads">
+            <span class="att-ic"><Paperclip size={14} /></span>
+            <span class="att-name">{a.name}</span>
+            <span class="att-size mono">{formatBytes(a.size)}</span>
+            {#if saving === a.id}<LoaderCircle size={13} class="spin" />{:else}<Download size={13} class="dl" />{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <section class="reader">
   {#if m}
@@ -195,58 +239,29 @@
           {:else if unsubDone === m.id}
             <div class="unsub done"><MailX size={14} /> Unsubscribed. You shouldn't get more mail from this list.</div>
           {/if}
+          {@render email(m, true)}
           <TldrCard {thread} message={m} />
+          <QuickReply message={m} {thread} />
 
-          {#each thread as t (t.id)}
-            {#if expanded.has(t.id)}
-              <div class="msg">
-                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                <header class="msg-head" onclick={() => thread.length > 1 && toggle(t.id)}>
-                  <Avatar addr={t.from} size={38} />
-                  <div class="who">
-                    <div class="line">
-                      <span class="name">{displayName(t.from)}</span>
-                      <span class="email">{t.from.email}</span>
-                    </div>
-                    <div class="line sub">
-                      <span>to {addrList(t.to) || "—"}</span>
-                      {#if t.cc.length}<span>· cc {addrList(t.cc)}</span>{/if}
-                    </div>
-                  </div>
-                  <time class="mono">{longTime(t.receivedAt)}</time>
-                </header>
-
-                <div class="content">
-                  <MailFrame html={t.bodyHtml} />
-                </div>
-                {#if !t.meetingType || t.meetingType === "none"}
-                  <DateChips message={t} />
+          {#if associated.length}
+            <section class="associated" aria-label="Related emails in this thread">
+              <h3>In this conversation <span>{associated.length} related {associated.length === 1 ? "email" : "emails"}</span></h3>
+              {#each associated as t (t.id)}
+                {#if expanded.has(t.id)}
+                  {@render email(t)}
+                {:else}
+                  <button class="collapsed" class:unread={!t.isRead} onclick={() => toggle(t.id)} aria-expanded="false">
+                    <Avatar addr={t.from} size={26} />
+                    {#if !t.isRead}<span class="unread-dot" title="Unread" aria-label="Unread email"></span>{/if}
+                    <span class="cname">{displayName(t.from)}</span>
+                    <span class="cprev">{t.preview}</span>
+                    <MessageStatus message={t} compact />
+                    <time class="mono">{shortTime(t.receivedAt)}</time>
+                  </button>
                 {/if}
-
-                {#if t.attachments.some((a) => !a.isInline)}
-                  <div class="atts">
-                    {#each t.attachments.filter((a) => !a.isInline) as a (a.id)}
-                      <button class="att" onclick={() => save(t, a)} title="Save to Downloads">
-                        <span class="att-ic"><Paperclip size={14} /></span>
-                        <span class="att-name">{a.name}</span>
-                        <span class="att-size mono">{formatBytes(a.size)}</span>
-                        {#if saving === a.id}<LoaderCircle size={13} class="spin" />{:else}<Download size={13} class="dl" />{/if}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {:else}
-              <button class="collapsed" onclick={() => toggle(t.id)}>
-                <Avatar addr={t.from} size={26} />
-                <span class="cname">{displayName(t.from)}</span>
-                <span class="cprev">{t.ai?.summary ?? t.preview}</span>
-                <time class="mono">{shortTime(t.receivedAt)}</time>
-              </button>
-            {/if}
-          {/each}
-
-          <QuickReply message={thread[thread.length - 1] ?? m} {thread} />
+              {/each}
+            </section>
+          {/if}
         </article>
       {/key}
     </div>
@@ -332,6 +347,13 @@
     height: 7px;
     border-radius: 50%;
   }
+  .associated { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .associated h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
+  .associated h3 span { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .message-status:empty { display: none; }
+  .message-status { margin-bottom: 10px; }
+  .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+  .collapsed.unread .cname { color: var(--fg-bright); }
   .msg {
     margin-bottom: 14px;
   }

@@ -84,6 +84,9 @@ export interface MessageSummary {
   preview: string;
   receivedAt: string; // ISO
   isRead: boolean;
+  /** Reply/forward activity confirmed by successful sends or Outlook metadata. */
+  isReplied: boolean;
+  isForwarded: boolean;
   isFlagged: boolean;
   hasAttachments: boolean;
   importance: "low" | "normal" | "high";

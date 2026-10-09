@@ -159,6 +159,7 @@ pub fn recipients(list: &[Addr]) -> Value {
 }
 
 fn to_incoming(account_id: &str, folder_id: &str, v: &Value) -> IncomingMessage {
+    let (is_replied, is_forwarded) = response_flags(v);
     IncomingMessage {
         id: v["id"].as_str().unwrap_or_default().to_string(),
         account_id: account_id.to_string(),
@@ -171,6 +172,8 @@ fn to_incoming(account_id: &str, folder_id: &str, v: &Value) -> IncomingMessage 
         preview: v["bodyPreview"].as_str().unwrap_or("").to_string(),
         received_at: v["receivedDateTime"].as_str().unwrap_or("1970-01-01T00:00:00Z").to_string(),
         is_read: v["isRead"].as_bool().unwrap_or(true),
+        is_replied,
+        is_forwarded,
         is_flagged: v.pointer("/flag/flagStatus").and_then(|f| f.as_str()) == Some("flagged"),
         has_attachments: v["hasAttachments"].as_bool().unwrap_or(false),
         importance: v["importance"].as_str().unwrap_or("normal").to_string(),
@@ -178,6 +181,22 @@ fn to_incoming(account_id: &str, folder_id: &str, v: &Value) -> IncomingMessage 
         is_draft: v["isDraft"].as_bool().unwrap_or(false),
         meeting_type: meeting_type_guess(v["@odata.type"].as_str()),
     }
+}
+
+// PidTagLastVerbExecuted (PtypInteger32): reply=102, reply-all=103, forward=104.
+const RESPONSE_EXPAND: &str = "singleValueExtendedProperties($filter=id eq 'Integer 0x1081')";
+fn response_flags(v: &Value) -> (bool, bool) {
+    let verb = v["singleValueExtendedProperties"].as_array().and_then(|properties| properties.iter()
+        .find(|p| p["id"].as_str() == Some("Integer 0x1081")))
+        .and_then(|p| p["value"].as_str()).and_then(|value| value.parse::<u32>().ok());
+    (matches!(verb, Some(102 | 103)), verb == Some(104))
+}
+
+/// Refresh activity without downloading the body again, including older cached mail.
+pub async fn response_status(st: &AppState, account_id: &str, id: &str) -> Result<(bool, bool)> {
+    let url = format!("/me/messages/{id}?$select=id&$expand={RESPONSE_EXPAND}");
+    let v = call(st, account_id, Method::GET, &url, None).await?;
+    Ok(response_flags(&v))
 }
 
 /// Delta items only carry the OData type; the exact meetingMessageType is fetched on open.
@@ -670,7 +689,7 @@ pub struct DeltaPage {
 pub fn initial_delta_url(folder_id: &str) -> String {
     let since = (chrono::Utc::now() - chrono::Duration::days(INITIAL_WINDOW_DAYS)).format("%Y-%m-%dT%H:%M:%SZ");
     format!(
-        "/me/mailFolders/{folder_id}/messages/delta?$select={MSG_SELECT}&$filter=receivedDateTime+ge+{since}&$orderby=receivedDateTime+desc"
+        "/me/mailFolders/{folder_id}/messages/delta?$select={MSG_SELECT}&$filter=receivedDateTime+ge+{since}&$orderby=receivedDateTime+desc&$expand={RESPONSE_EXPAND}"
     )
 }
 
@@ -721,9 +740,11 @@ pub fn html_to_text(html: &str) -> String {
 }
 
 pub async fn body(st: &AppState, account_id: &str, id: &str) -> Result<StoredBody> {
-    let url = format!("/me/messages/{id}?$select=body,bccRecipients,replyTo,hasAttachments,internetMessageHeaders");
+    let url = format!("/me/messages/{id}?$select=body,bccRecipients,replyTo,hasAttachments,internetMessageHeaders&$expand={RESPONSE_EXPAND}");
     let resp = send_raw(st, account_id, Method::GET, &url, None, Some("outlook.body-content-type=\"html\"")).await?;
     let v: Value = resp.json().await?;
+    let (replied, forwarded) = response_flags(&v);
+    st.db.record_response(id, replied, forwarded)?;
     let mut html = v.pointer("/body/content").and_then(|x| x.as_str()).unwrap_or("").to_string();
     if v.pointer("/body/contentType").and_then(|x| x.as_str()) == Some("text") {
         html = format!("<pre style=\"white-space:pre-wrap;font:inherit\">{}</pre>", html.replace('&', "&amp;").replace('<', "&lt;"));
@@ -945,6 +966,20 @@ fn merge_into_quoted(ours: &str, quoted: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn outlook_response_metadata_distinguishes_reply_all_and_forward() {
+        for (verb, expected) in [("102", (true, false)), ("103", (true, false)), ("104", (false, true)), ("0", (false, false)), ("bogus", (false, false))] {
+            let v = serde_json::json!({"singleValueExtendedProperties": [
+                {"id": "Integer 0x9999", "value": "104"},
+                {"id": "Integer 0x1081", "value": verb}
+            ]});
+            assert_eq!(super::response_flags(&v), expected);
+            let message = super::to_incoming("account", "inbox", &v);
+            assert_eq!((message.is_replied, message.is_forwarded), expected);
+        }
+        assert_eq!(super::response_flags(&serde_json::json!({})), (false, false));
+        assert!(super::initial_delta_url("inbox").contains("$expand=singleValueExtendedProperties"));
+    }
     #[test]
     fn parses_list_unsubscribe() {
         let h = serde_json::json!([

@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS messages (
   preview TEXT NOT NULL DEFAULT '',
   received_at TEXT NOT NULL,
   is_read INTEGER NOT NULL DEFAULT 0,
+  is_replied INTEGER NOT NULL DEFAULT 0,
+  is_forwarded INTEGER NOT NULL DEFAULT 0,
   is_flagged INTEGER NOT NULL DEFAULT 0,
   has_attachments INTEGER NOT NULL DEFAULT 0,
   importance TEXT NOT NULL DEFAULT 'normal',
@@ -165,6 +167,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 
 /// Idempotent column additions for databases created by older versions.
 fn migrate(conn: &Connection) -> Result<()> {
+    let response_migration = conn.unchecked_transaction()?;
+    let mut refresh_response_metadata = false;
+    for col in ["is_replied", "is_forwarded"] {
+        let has = response_migration.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = ?1")?.exists([col])?;
+        if !has {
+            response_migration.execute_batch(&format!("ALTER TABLE messages ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"))?;
+            refresh_response_metadata = true;
+        }
+    }
+    // Delta tokens encode their original query. Start one fresh round with the new
+    // extended-property expansion, keeping the existing messages and bodies cached.
+    if refresh_response_metadata {
+        response_migration.execute("UPDATE sync_state SET delta_link = NULL", [])?;
+    }
+    response_migration.commit()?;
     let has: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('annotations') WHERE name = 'suggested_reply'")?
         .exists([])?;
@@ -248,7 +265,7 @@ fn row_event(r: &Row) -> rusqlite::Result<CalEvent> {
 const SUMMARY_COLS: &str = "m.id, m.account_id, m.folder_id, m.conversation_id, m.subject, m.from_name, m.from_email, \
   m.to_json, m.preview, m.received_at, m.is_read, m.is_flagged, m.has_attachments, m.importance, \
   a.category, a.priority, a.summary, a.action_items_json, a.needs_reply, a.due_at, a.suggested_reply, m.meeting_type, \
-  (SELECT until FROM snoozes s WHERE s.message_id = m.id)";
+  (SELECT until FROM snoozes s WHERE s.message_id = m.id), m.is_replied, m.is_forwarded";
 
 fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
     let id: String = r.get(0)?;
@@ -277,6 +294,8 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<MessageSummary> {
         preview: r.get(8)?,
         received_at: r.get(9)?,
         is_read: r.get::<_, i64>(10)? != 0,
+        is_replied: r.get::<_, i64>(23)? != 0,
+        is_forwarded: r.get::<_, i64>(24)? != 0,
         is_flagged: r.get::<_, i64>(11)? != 0,
         has_attachments: r.get::<_, i64>(12)? != 0,
         importance: r.get(13)?,
@@ -321,6 +340,8 @@ pub struct IncomingMessage {
     pub preview: String,
     pub received_at: String,
     pub is_read: bool,
+    pub is_replied: bool,
+    pub is_forwarded: bool,
     pub is_flagged: bool,
     pub has_attachments: bool,
     pub importance: String,
@@ -554,14 +575,16 @@ impl Db {
             let mut exists = tx.prepare("SELECT rowid FROM messages WHERE id = ?")?;
             let mut ins = tx.prepare(
                 "INSERT INTO messages (id, account_id, folder_id, conversation_id, subject, from_name, from_email,
-                   to_json, cc_json, preview, received_at, is_read, is_flagged, has_attachments, importance, web_link, is_draft, meeting_type)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                   to_json, cc_json, preview, received_at, is_read, is_flagged, has_attachments, importance, web_link, is_draft, meeting_type, is_replied, is_forwarded)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
                  ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id, conversation_id=excluded.conversation_id,
                    subject=excluded.subject, from_name=excluded.from_name, from_email=excluded.from_email,
                    to_json=excluded.to_json, cc_json=excluded.cc_json, preview=excluded.preview,
                    received_at=excluded.received_at, is_read=excluded.is_read, is_flagged=excluded.is_flagged,
                    has_attachments=excluded.has_attachments, importance=excluded.importance,
                    web_link=excluded.web_link, is_draft=excluded.is_draft,
+                   is_replied=MAX(messages.is_replied, excluded.is_replied),
+                   is_forwarded=MAX(messages.is_forwarded, excluded.is_forwarded),
                    meeting_type=COALESCE(excluded.meeting_type, messages.meeting_type)",
             )?;
             let mut fts_del = tx.prepare("DELETE FROM messages_fts WHERE rowid = ?")?;
@@ -596,6 +619,8 @@ impl Db {
                     m.web_link,
                     m.is_draft as i64,
                     m.meeting_type,
+                    m.is_replied as i64,
+                    m.is_forwarded as i64,
                 ])?;
                 let rowid: i64 = tx.query_row("SELECT rowid FROM messages WHERE id = ?", [&m.id], |r| r.get(0))?;
                 fts_del.execute([rowid])?;
@@ -650,6 +675,15 @@ impl Db {
                 )?;
             }
         }
+        Ok(())
+    }
+
+    /// Keep both confirmed actions even though Outlook only exposes its last verb.
+    pub fn record_response(&self, id: &str, replied: bool, forwarded: bool) -> Result<()> {
+        self.conn().execute(
+            "UPDATE messages SET is_replied = MAX(is_replied, ?1), is_forwarded = MAX(is_forwarded, ?2) WHERE id = ?3",
+            params![replied as i64, forwarded as i64, id],
+        )?;
         Ok(())
     }
 
@@ -1165,6 +1199,41 @@ impl Db {
 mod tests {
     use super::*;
 
+    #[test]
+    fn confirmed_responses_survive_sync_and_keep_both_actions() {
+        let db = mem();
+        seed(&db);
+        db.upsert_messages(&[msg("response", "inbox", "Question", "2026-10-09T10:00:00Z")]).unwrap();
+        assert!(!db.summary("response").unwrap().unwrap().is_replied);
+        db.record_response("response", true, false).unwrap();
+        db.upsert_messages(&[msg("response", "inbox", "Question", "2026-10-09T10:00:00Z")]).unwrap();
+        assert!(db.summary("response").unwrap().unwrap().is_replied);
+        let mut forwarded = msg("response", "inbox", "Question", "2026-10-09T10:00:00Z");
+        forwarded.is_forwarded = true;
+        db.upsert_messages(&[forwarded]).unwrap();
+        let summary = db.summary("response").unwrap().unwrap();
+        assert!(summary.is_replied && summary.is_forwarded);
+        db.record_response("response", false, false).unwrap();
+        assert!(db.summary("response").unwrap().unwrap().is_forwarded);
+    }
+
+    #[test]
+    fn response_migration_upgrades_old_cache_and_resets_delta_once() {
+        let db = mem();
+        seed(&db);
+        db.upsert_messages(&[msg("old", "inbox", "Cached mail", "2026-10-09T10:00:00Z")]).unwrap();
+        db.set_delta_link("a1", "inbox", Some("old-token")).unwrap();
+        db.conn().execute_batch("ALTER TABLE messages DROP COLUMN is_replied; ALTER TABLE messages DROP COLUMN is_forwarded").unwrap();
+        migrate(&db.conn()).unwrap();
+        assert!(db.delta_link("a1", "inbox").unwrap().is_none());
+        let summary = db.summary("old").unwrap().unwrap();
+        assert_eq!(summary.subject, "Cached mail");
+        assert!(!summary.is_replied && !summary.is_forwarded);
+        db.set_delta_link("a1", "inbox", Some("new-token")).unwrap();
+        migrate(&db.conn()).unwrap();
+        assert_eq!(db.delta_link("a1", "inbox").unwrap().as_deref(), Some("new-token"));
+    }
+
     fn mem() -> Db {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
@@ -1184,6 +1253,8 @@ mod tests {
             preview: "Hej! Kvartalsrapporten är klar".into(),
             received_at: at.into(),
             is_read: false,
+            is_replied: false,
+            is_forwarded: false,
             is_flagged: false,
             has_attachments: false,
             importance: "normal".into(),

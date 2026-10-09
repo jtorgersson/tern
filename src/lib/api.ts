@@ -53,6 +53,7 @@ export const api = {
   messages: (query: MessageQuery) => invoke<MessageSummary[]>("messages_list", { query }),
   /** Full message; fetches + caches the body from the server on first open. */
   message: (id: string) => invoke<MessageFull>("message_get", { id }),
+  messageStatus: (id: string) => invoke<MessageSummary>("message_refresh_status", { id }),
   /** All cached messages in a conversation (any folder), oldest first, bodies loaded. */
   thread: (id: string) => invoke<MessageFull[]>("thread_get", { id }),
 

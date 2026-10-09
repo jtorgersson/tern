@@ -70,6 +70,10 @@ pub struct MessageSummary {
     pub preview: String,
     pub received_at: String,
     pub is_read: bool,
+    #[serde(default)]
+    pub is_replied: bool,
+    #[serde(default)]
+    pub is_forwarded: bool,
     pub is_flagged: bool,
     pub has_attachments: bool,
     pub importance: String,
