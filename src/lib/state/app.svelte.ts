@@ -23,6 +23,7 @@ import {
 import { toasts } from "./toasts.svelte";
 import { errMsg } from "$lib/util/misc";
 import { openMessageWindow } from "$lib/util/windows";
+import { selectRange } from "$lib/util/selection";
 
 export type UiView = MessageView | { kind: "results"; title: string; ids: string[] };
 
@@ -73,6 +74,11 @@ class AppState {
   view = $state<UiView>({ kind: "today" });
   accountFilter = $state<string | null>(null);
   unreadOnly = $state(false);
+  flaggedOnly = $state(false);
+  attachmentsOnly = $state(false);
+  listError = $state("");
+  private listErrorMore = false;
+  private selectionAnchor: string | null = null;
   messages = $state<MessageSummary[]>([]);
   loading = $state(false);
   hasMore = $state(true);
@@ -319,6 +325,8 @@ class AppState {
     // Removing an account also removes the shared mailboxes opened through it.
     const gone = new Set([id, ...this.accounts.filter((a) => a.ownerId === id).map((a) => a.id)]);
     this.accounts = this.accounts.filter((a) => !gone.has(a.id));
+    const { connect } = await import("./connect.svelte");
+    for (const accountId of gone) connect.removeAccount(accountId);
     if (this.accountFilter && gone.has(this.accountFilter)) this.accountFilter = null;
     this.folders = this.folders.filter((f) => !gone.has(f.accountId));
     await this.reload();
@@ -379,7 +387,7 @@ class AppState {
   setView(v: UiView) {
     if (viewKey(v) === viewKey(this.view)) return;
     this.view = v;
-    this.checked = new Set();
+    this.unreadOnly = this.flaggedOnly = this.attachmentsOnly = false;
     this.reload();
   }
 
@@ -394,8 +402,31 @@ class AppState {
     this.reload();
   }
 
+  toggleMailFilter(filter: "flaggedOnly" | "attachmentsOnly") {
+    this[filter] = !this[filter];
+    this.reload();
+  }
+
+  clearMailFilters() {
+    this.unreadOnly = this.flaggedOnly = this.attachmentsOnly = false;
+    this.reload();
+  }
+
+  retryList() {
+    return this.listErrorMore ? this.loadMore() : this.reload(true);
+  }
+
   async reload(keepSelection = false) {
     const seq = ++this.loadSeq;
+    this.listError = "";
+    this.listErrorMore = false;
+    if (!keepSelection) {
+      this.checked = new Set();
+      this.selectionAnchor = null;
+      this.messages = [];
+      this.selectedId = null;
+      this.closeReader();
+    }
     this.loading = true;
     try {
       let list: MessageSummary[];
@@ -422,20 +453,23 @@ class AppState {
         const fulls = await Promise.all(
           ids.map((id) => api.message(id).catch(() => null)),
         );
-        list = fulls.filter((m): m is MessageFull => !!m);
-        this.hasMore = false;
+        list = fulls.filter((m): m is MessageFull => !!m && (!this.unreadOnly || !m.isRead) && (!this.flaggedOnly || m.isFlagged) && (!this.attachmentsOnly || m.hasAttachments));
       } else {
         list = await api.messages({
           view: this.view,
           accountId: this.view.kind === "folder" ? null : this.accountFilter,
           unreadOnly: this.unreadOnly,
+          flaggedOnly: this.flaggedOnly,
+          attachmentsOnly: this.attachmentsOnly,
           limit: PAGE,
           before: null,
         });
-        this.hasMore = list.length >= PAGE;
       }
       if (seq !== this.loadSeq) return;
+      this.hasMore = this.view.kind !== "results" && list.length >= PAGE;
       this.messages = list;
+      const visibleIds = new Set(list.map(m => m.id));
+      this.checked = new Set([...this.checked].filter(id => visibleIds.has(id)));
       if (this.open) {
         const status = list.find(m => m.id === this.open?.id);
         if (status) this.patchLocal([status.id], { isReplied: status.isReplied, isForwarded: status.isForwarded });
@@ -448,7 +482,7 @@ class AppState {
         }
       }
     } catch (e) {
-      if (seq === this.loadSeq) toasts.error(errMsg(e));
+      if (seq === this.loadSeq) { this.listError = errMsg(e); this.listErrorMore = false; }
     } finally {
       if (seq === this.loadSeq) this.loading = false;
     }
@@ -465,15 +499,21 @@ class AppState {
         view: this.view,
         accountId: this.view.kind === "folder" ? null : this.accountFilter,
         unreadOnly: this.unreadOnly,
+        flaggedOnly: this.flaggedOnly,
+        attachmentsOnly: this.attachmentsOnly,
         limit: PAGE,
         before: last.receivedAt,
+        beforeId: last.id,
       });
       if (seq !== this.loadSeq) return;
       const seen = new Set(this.messages.map((m) => m.id));
       this.messages = [...this.messages, ...more.filter((m) => !seen.has(m.id))];
       this.hasMore = more.length >= PAGE;
+      this.listError = "";
+    } catch (e) {
+      if (seq === this.loadSeq) { this.listError = errMsg(e); this.listErrorMore = true; }
     } finally {
-      this.loading = false;
+      if (seq === this.loadSeq) this.loading = false;
     }
   }
 
@@ -589,11 +629,21 @@ class AppState {
     if (next >= this.messages.length - 8) this.loadMore();
   }
 
-  toggleCheck(id: string) {
+  toggleCheck(id: string, range = false) {
+    if (range) {
+      this.checked = selectRange(this.messages.map(m => m.id), this.checked, this.selectionAnchor ?? this.selectedId, id);
+      return;
+    }
     const s = new Set(this.checked);
     if (s.has(id)) s.delete(id);
     else s.add(id);
     this.checked = s;
+    this.selectionAnchor = id;
+  }
+
+  selectAllLoaded() {
+    this.checked = this.messages.length && this.messages.every(m => this.checked.has(m.id))
+      ? new Set() : new Set(this.messages.map(m => m.id));
   }
 
   /** Ids an action applies to: checked set, else the selection. */
@@ -627,6 +677,8 @@ class AppState {
   }
 
   closeReader() {
+    ++this.openSeq;
+    this.openLoading = false;
     this.open = null;
     this.thread = [];
   }

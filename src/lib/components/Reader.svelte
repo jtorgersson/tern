@@ -35,6 +35,7 @@
     SquareArrowOutUpRight,
     X,
     ChevronUp,
+    ArrowLeft,
   } from "@lucide/svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { parseMailto } from "$lib/util/mailto";
@@ -183,6 +184,7 @@
 <section class="reader">
   {#if m}
     <div class="toolbar" data-tauri-drag-region>
+      {#if app.windowKind === "main"}<button class="btn ghost back-list" onclick={() => app.closeReader()}><ArrowLeft size={14} /> Back to messages</button>{/if}
       <div class="group">
         <button class="icon-btn" title="Archive (e)" onclick={() => app.archive([m.id])}><Archive size={16} /></button>
         <button class="icon-btn" title="Delete (#)" onclick={() => app.trash([m.id])}><Trash2 size={16} /></button>
@@ -304,6 +306,7 @@
     padding: 8px 10px;
     border-bottom: 1px solid var(--line);
   }
+  .back-list { display: none; }
   .group {
     display: flex;
     flex-wrap: wrap;
@@ -493,6 +496,9 @@
   }
   .ph-keys {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 0 16px;
     gap: 16px;
     font-size: 11.5px;
   }

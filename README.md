@@ -1,6 +1,13 @@
 # Tern
 
-AI-native, keyboard-first mail, calendar, and conversations for Omarchy. It's built with Tauri 2, Rust, and Svelte 5.
+Mail, calendar, and conversations in one focused workspace for Omarchy. Built with Tauri 2, Rust, and Svelte 5, with keyboard shortcuts throughout and AI available when you need it.
+
+### A calmer workspace — 0.2.0
+
+- **Work through mail:** combine Unread, Flagged, and Files filters over the full local mailbox. Filters reset when switching folders. Select a range with Shift-click, use Ctrl+A to select or clear loaded messages, and archive, mark read, flag, snooze, or delete the selection. Selection clears when changing view, account, or filters.
+- **Keep people close:** pin chats and channels in Connect. Pins are saved on this device per account and survive restarts; unpin them from the conversation list or header. Unfinished conversation drafts have a visible Draft marker and remain available during the session.
+- **Room to read:** docked Connect gives the selected conversation the full panel, with Back to conversations for switching. Expanded Connect keeps its list beside the conversation. Small windows show the message list or the open email, with Back to messages; wider windows keep both visible.
+- **Clearer controls:** a labeled New email action, Workspace / Mail / Focus navigation, restrained row styling, visible selection controls, and explicit loading, empty, and retry states. Reduced-motion preferences are respected.
 
 - **Microsoft 365 / Outlook.com** via Microsoft Graph. Multiple accounts and a unified inbox are supported, and delta sync runs every 60s.
 - **Connect:** Microsoft Teams chats and channels beside your mail or calendar (`g b`). Read and send messages, browse channel threads, and reply without switching apps. Resize the dock or expand it; conversation drafts survive navigation and closing the dock during the session. Create chats with new people or groups, draft replies with AI, catch up on a thread, and turn conversations into email or meeting drafts. Calls and attachments open in Teams. Work or school accounts only; enable access per account.
@@ -42,7 +49,7 @@ To add more accounts, go to Settings → Accounts → *Add Microsoft account*. O
 
 ## Connect with Microsoft Teams
 
-Connect is Tern’s conversation workspace. Open **Connect** in the sidebar, use the toolbar’s conversation button, or press **g b**. It stays open as you switch between your inbox and calendar; drag the divider to resize it or use Expand to focus on conversations. On smaller windows the mail sidebar is hidden while docked; the command palette and navigation shortcuts remain available.
+Connect is Tern’s conversation workspace. Open **Connect** in the sidebar, use the toolbar’s conversation button, or press **g b**. It stays open as you switch between your inbox and calendar; drag the divider to resize it or use Expand to focus on conversations. On smaller windows the mail sidebar is hidden while docked; the command palette and navigation shortcuts remain available. Use **Back to conversations** to switch chats in the dock. Pin frequently used chats and channels to keep them within reach, including when they are no longer on the first page of recent conversations.
 
 In your existing Entra app registration, add these **Microsoft Graph → Delegated** permissions:
 
@@ -96,6 +103,9 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `#` | delete |
 | `s` | flag |
 | `u` | toggle read |
+| `U` | unread filter |
+| `Ctrl+A` | select / clear all loaded messages |
+| `Shift+click` | select a range of messages |
 | `r` / `Shift+R` / `f` | reply / reply all / forward |
 | `c` | compose |
 | `/` | search mail, calendar, and Connect |

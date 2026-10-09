@@ -13,7 +13,6 @@
     ShieldAlert,
     Folder as FolderIcon,
     ChevronRight,
-    Sparkles,
     Layers,
     Plus,
     Sun,
@@ -112,6 +111,7 @@
 
   <div class="scroll">
     <section>
+      <div class="heading"><span class="eyebrow">Workspace</span></div>
       <button class="item today" class:active={isActive({ kind: "today" })} onclick={() => app.setView({ kind: "today" })}>
         <Sun size={15} />
         <span class="name">Today</span>
@@ -125,6 +125,9 @@
       <button class="item" class:active={connect.open} onclick={() => connect.toggle()} title="Connect beside mail and calendar (g b)">
         <MessageCircle size={15} /><span class="name">Connect</span>
       </button>
+    </section>
+    <section>
+      <div class="heading"><span class="eyebrow">Mail</span></div>
       {#each MAILBOXES as m (m.wk)}
         {@const v: UiView = { kind: "unified", wellKnown: m.wk }}
         {@const unread = m.wk === "inbox" || m.wk === "junkemail" ? app.unifiedUnread(m.wk) : 0}
@@ -149,12 +152,11 @@
       {/each}
     </section>
 
+    {#if app.aiReady || hasCategories}
     <section>
       <div class="heading">
-        <Sparkles size={11} />
-        <span class="eyebrow">Smart inbox</span>
+        <span class="eyebrow">Focus</span>
       </div>
-      {#if app.aiReady || hasCategories}
         {#each SMART_CATEGORIES as c (c)}
           {@const v: UiView = { kind: "category", category: c }}
           {@const n = app.categoryCounts[c] ?? 0}
@@ -164,13 +166,8 @@
             {#if n}<span class="count" class:strong={c === "needs_reply"}>{n}</span>{/if}
           </button>
         {/each}
-      {:else}
-        <button class="setup" onclick={() => app.openSettings("ai")}>
-          <span>Let AI sort your inbox into <em>Needs reply</em>, <em>FYI</em>, <em>Newsletters</em>…</span>
-          <span class="link">Set up AI →</span>
-        </button>
-      {/if}
     </section>
+    {/if}
 
     {#each visibleAccounts as a (a.id)}
       {@const nodes = tree(a.id)}
@@ -222,7 +219,7 @@
     gap: 6px;
     height: 24px;
     padding: 0 9px;
-    border-radius: 999px;
+    border-radius: 4px;
     font-size: 11.5px;
     font-weight: 550;
     color: var(--fg-dim);
@@ -285,9 +282,9 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    height: 30px;
+    height: 32px;
     padding: 0 10px 0 12px;
-    border-radius: 7px;
+    border-radius: 4px;
     color: var(--fg-dim);
     font-size: 13px;
     text-align: left;
@@ -349,28 +346,6 @@
     margin: 0 3px;
     border-radius: 3px;
     flex: none;
-  }
-  .setup {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin: 2px 4px;
-    padding: 10px 12px;
-    border-radius: 9px;
-    text-align: left;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--fg-dim);
-    background: linear-gradient(135deg, var(--accent-soft), transparent 80%);
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 20%, transparent);
-  }
-  .setup em {
-    font-style: normal;
-    color: var(--fg);
-  }
-  .setup .link {
-    color: var(--accent);
-    font-weight: 600;
   }
   footer {
     display: flex;

@@ -23,11 +23,11 @@
     font-weight: 620;
     letter-spacing: 0.01em;
     color: oklch(0.86 0.06 var(--h));
-    background: linear-gradient(145deg, oklch(0.42 0.07 var(--h)), oklch(0.32 0.05 var(--h)));
+    background: oklch(0.36 0.035 var(--h));
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
   }
   :global([data-mode="light"]) .avatar {
     color: oklch(0.35 0.08 var(--h));
-    background: linear-gradient(145deg, oklch(0.9 0.05 var(--h)), oklch(0.84 0.06 var(--h)));
+    background: oklch(0.88 0.03 var(--h));
   }
 </style>

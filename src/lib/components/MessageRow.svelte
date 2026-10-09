@@ -28,33 +28,38 @@
   }
 </script>
 
+<!-- Roving focus keeps the list one tab stop; Enter opens and Space selects. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
   class="row"
   class:selected
   class:unread={!m.isRead}
   class:checked
   class:compact
-  role="option"
-  aria-selected={selected}
-  tabindex="-1"
+  role="listitem"
+  aria-current={selected ? "true" : undefined}
+  tabindex={selected ? 0 : -1}
   data-id={m.id}
-  onclick={(e) => (e.ctrlKey || e.metaKey ? app.toggleCheck(m.id) : app.select(m.id))}
-  ondblclick={(e) => !e.ctrlKey && !e.metaKey && app.openInWindow(m.id)}
-  onkeydown={() => {}}>
+  onclick={(e) => (e.shiftKey || e.ctrlKey || e.metaKey ? app.toggleCheck(m.id, e.shiftKey) : app.select(m.id))}
+  ondblclick={(e) => !e.ctrlKey && !e.metaKey && !e.shiftKey && !(e.target as HTMLElement).closest("button, input") && app.openInWindow(m.id)}
+  onkeydown={(e) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === " ") { e.preventDefault(); e.stopPropagation(); app.toggleCheck(m.id, e.shiftKey); }
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); app.select(m.id); if (!app.readingPane) app.openInWindow(m.id); }
+  }}>
   {#if showAccount && acct}
     <span class="stripe" style:background={hueColor(acct.hue, app.mode)}></span>
   {/if}
   <span class="lead">
+    <input class="row-check" type="checkbox" aria-label={`Select ${m.subject || "message"}`} checked={checked} onclick={(e) => stop(e, () => app.toggleCheck(m.id, e.shiftKey))} ondblclick={(e) => e.stopPropagation()} />
     {#if !compact}
-      <button class="avatar-wrap" onclick={(e) => stop(e, () => app.toggleCheck(m.id))} aria-label="Select">
+      <button class="avatar-wrap" onclick={(e) => stop(e, () => app.toggleCheck(m.id, e.shiftKey))} aria-label={`Select message from ${displayName(who)}`} aria-pressed={checked} tabindex="-1" ondblclick={(e) => e.stopPropagation()}>
         {#if checked}
           <span class="tick"><Check size={15} strokeWidth={3} /></span>
         {:else}
           <Avatar addr={who} size={34} />
         {/if}
       </button>
-    {:else}
-      <span class="udot" class:on={!m.isRead}></span>
     {/if}
   </span>
 
@@ -106,10 +111,11 @@
   .row {
     position: relative;
     display: flex;
-    gap: 12px;
+    gap: 10px;
     padding: 11px 14px 11px 12px;
-    margin: 0 6px;
-    border-radius: 10px;
+    margin: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
     cursor: default;
     transition: background 120ms var(--ease);
   }
@@ -122,6 +128,7 @@
   }
   .row.selected {
     background: color-mix(in oklab, var(--selection) 55%, transparent);
+    box-shadow: inset 2px 0 var(--accent);
   }
   .row.checked {
     background: var(--active);
@@ -140,12 +147,17 @@
     display: flex;
     align-items: flex-start;
     padding-top: 1px;
+    position: relative;
   }
+  .row-check { position: absolute; inset: 9px auto auto 10px; width: 14px; height: 14px; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+  .row:hover .row-check, .row:focus-within .row-check, .row.checked .row-check, .compact .row-check { opacity: 1; }
+  .row:hover .avatar-wrap, .row:focus-within .avatar-wrap, .row.checked .avatar-wrap { visibility: hidden; }
   .compact .lead {
-    width: 10px;
-    padding-top: 7px;
+    width: 14px;
+    padding-top: 2px;
     justify-content: center;
   }
+  .compact .row-check { position: static; }
   .avatar-wrap {
     display: grid;
     border-radius: 50%;
@@ -192,7 +204,6 @@
   }
   .udot.on {
     background: var(--accent);
-    box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6);
   }
   .prio {
     font-weight: 800;
@@ -238,10 +249,13 @@
   .hover-actions button.on {
     color: var(--accent);
   }
-  .row:hover .hover-actions {
+  .row:hover .hover-actions, .row:focus-within .hover-actions {
     display: flex;
   }
   .row:hover .time,
+  .row:focus-within .time,
+  .row:focus-within :global(.flag),
+  .row:focus-within :global(.meta-ic),
   .row:hover :global(.flag),
   .row:hover :global(.meta-ic) {
     display: none;

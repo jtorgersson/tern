@@ -1,7 +1,7 @@
 {
   "name": "tern",
-  "version": "0.1.0",
-  "description": "",
+  "version": "0.2.0",
+  "description": "Mail, calendar, and conversations in one focused workspace",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

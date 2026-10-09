@@ -772,13 +772,24 @@ impl Db {
         if q.unread_only {
             wh.push("m.is_read = 0".into());
         }
+        if q.flagged_only {
+            wh.push("m.is_flagged = 1".into());
+        }
+        if q.attachments_only {
+            wh.push("m.has_attachments = 1".into());
+        }
         if let Some(b) = &q.before {
-            wh.push("m.received_at < ?".into());
-            args.push(b.clone().into());
+            if let Some(id) = &q.before_id {
+                wh.push("(m.received_at < ? OR (m.received_at = ? AND m.id < ?))".into());
+                args.extend([b.clone().into(), b.clone().into(), id.clone().into()]);
+            } else {
+                wh.push("m.received_at < ?".into());
+                args.push(b.clone().into());
+            }
         }
         sql.push_str("WHERE ");
         sql.push_str(&wh.iter().map(|w| format!("({w})")).collect::<Vec<_>>().join(" AND "));
-        sql.push_str(" ORDER BY m.received_at DESC LIMIT ?");
+        sql.push_str(" ORDER BY m.received_at DESC, m.id DESC LIMIT ?");
         args.push(q.limit.clamp(1, 500).into());
         let mut st = c.prepare(&sql)?;
         let rows = st.query_map(params_from_iter(args), summary_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1296,11 +1307,40 @@ mod tests {
     }
 
     #[test]
+    fn mail_filters_apply_before_limit_and_cursor_keeps_timestamp_ties() {
+        let db = mem();
+        seed(&db);
+        let at = "2026-10-09T10:00:00Z";
+        let mut messages: Vec<_> = (0..6).map(|n| msg(&format!("m{n}"), "inbox", "Report", at)).collect();
+        for m in &mut messages { m.is_flagged = true; m.has_attachments = true; }
+        messages[5].is_read = true;
+        messages[4].has_attachments = false;
+        messages[3].is_flagged = false;
+        db.upsert_messages(&messages).unwrap();
+        let mut q = MessageQuery { view: MessageView::Unified { well_known: "inbox".into() }, account_id: Some("a1".into()), unread_only: true, flagged_only: true, attachments_only: true, limit: 2, before: None, before_id: None };
+        let page = db.list(&q).unwrap();
+        assert_eq!(page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["m2", "m1"]);
+        q.before = Some(page[1].received_at.clone());
+        q.before_id = Some(page[1].id.clone());
+        let page = db.list(&q).unwrap();
+        assert_eq!(page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["m0"]);
+        q.before_id = Some("m0".into());
+        assert!(db.list(&q).unwrap().is_empty());
+        q.before = None;
+        q.before_id = None;
+        q.account_id = Some("other".into());
+        assert!(db.list(&q).unwrap().is_empty());
+        q.account_id = None;
+        db.snooze(&["m2".into()], "2030-01-01T00:00:00Z").unwrap();
+        assert_eq!(db.list(&q).unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["m1", "m0"]);
+    }
+
+    #[test]
     fn snooze_hides_until_due() {
         let db = mem();
         seed(&db);
         db.upsert_messages(&[msg("m1", "inbox", "Invoice", "2026-10-05T10:00:00Z"), msg("m2", "inbox", "Hello", "2026-10-06T09:00:00Z")]).unwrap();
-        let q = |view| MessageQuery { view, account_id: None, unread_only: false, limit: 50, before: None };
+        let q = |view| MessageQuery { view, account_id: None, unread_only: false, flagged_only: false, attachments_only: false, limit: 50, before: None, before_id: None };
         db.snooze(&["m1".into()], "2026-10-07T07:00:00Z").unwrap();
         let inbox: Vec<String> = db.list(&q(MessageView::Unified { well_known: "inbox".into() })).unwrap().into_iter().map(|m| m.id).collect();
         assert_eq!(inbox, vec!["m2"]);
@@ -1402,7 +1442,7 @@ mod tests {
         // second upsert is not "new"
         assert!(db.upsert_messages(&[msg("m1", "inbox", "Quarterly report v2", "2026-10-05T10:00:00Z")]).unwrap().is_empty());
 
-        let q = |view| MessageQuery { view, account_id: None, unread_only: false, limit: 50, before: None };
+        let q = |view| MessageQuery { view, account_id: None, unread_only: false, flagged_only: false, attachments_only: false, limit: 50, before: None, before_id: None };
         let inbox = db.list(&q(MessageView::Unified { well_known: "inbox".into() })).unwrap();
         assert_eq!(inbox.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["m2", "m1"]);
 

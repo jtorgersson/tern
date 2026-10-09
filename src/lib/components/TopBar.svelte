@@ -73,8 +73,8 @@
       onclick={() => app.syncNow()}>
       <RefreshCw size={15} class={app.isSyncing ? "spin" : ""} />
     </button>
-    <button class="icon-btn" title="Compose (c)" aria-label="Compose" onclick={() => composer.compose()}>
-      <PenLine size={15} />
+    <button class="btn primary compose" title="New email (c)" aria-label="New email" onclick={() => composer.compose()}>
+      <PenLine size={14} /><span>New email</span>
     </button>
     <button
       class="ask"
@@ -96,9 +96,9 @@
     height: 46px;
     flex: none;
     display: grid;
-    grid-template-columns: 1fr minmax(280px, 560px) 1fr;
+    grid-template-columns: minmax(70px, 220px) minmax(180px, 560px) 1fr;
     align-items: center;
-    gap: 16px;
+    gap: 12px;
     padding: 0 10px 0 16px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
@@ -157,6 +157,16 @@
     justify-content: flex-end;
     gap: 2px;
   }
+  .compose { margin: 0 6px; }
+  @media (max-width: 1050px) {
+    .bar { grid-template-columns: auto minmax(180px, 1fr) auto; }
+    .ask span, .ask kbd { display: none; }
+    .brand .word { display: none; }
+  }
+  @media (max-width: 720px) {
+    .compose span { display: none; }
+    .bar { gap: 6px; padding-left: 10px; }
+  }
   .status {
     font-size: 11.5px;
     font-weight: 550;
@@ -172,14 +182,13 @@
     border-radius: 8px;
     font-size: 12.5px;
     font-weight: 560;
-    color: var(--accent);
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent);
+    color: var(--fg-dim);
+    background: transparent;
     transition: all var(--t) var(--ease);
   }
   .ask:hover,
   .ask.on {
-    background: color-mix(in oklab, var(--accent) 26%, transparent);
+    background: var(--hover);
   }
   .ask kbd {
     border-color: color-mix(in oklab, var(--accent) 30%, transparent);

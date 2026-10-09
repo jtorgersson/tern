@@ -1,7 +1,7 @@
 [package]
 name = "tern"
-version = "0.1.0"
-description = "AI-native mail client for Omarchy"
+version = "0.2.0"
+description = "Mail, calendar, and conversations for Omarchy"
 authors = ["John Torgersson"]
 edition = "2021"
 

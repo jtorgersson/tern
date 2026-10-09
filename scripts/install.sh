@@ -13,13 +13,13 @@ install -Dm644 /dev/stdin "$HOME/.local/share/applications/tern.desktop" <<DESKT
 Type=Application
 Name=Tern
 GenericName=Mail
-Comment=AI-native mail for Omarchy
+Comment=Mail, calendar, and conversations
 Exec=$HOME/.local/bin/tern %u
 Icon=tern
 Terminal=false
 Categories=Network;Email;Office;
 MimeType=x-scheme-handler/mailto;
-Keywords=mail;email;outlook;microsoft;365;
+Keywords=mail;email;calendar;chat;teams;outlook;microsoft;365;
 StartupWMClass=tern
 DESKTOP
 

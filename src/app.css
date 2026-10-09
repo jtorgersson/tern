@@ -41,7 +41,7 @@
 
   --r-sm: 6px;
   --r: 9px;
-  --r-lg: 14px;
+  --r-lg: 10px;
   --row-h: 68px;
   --pad: 14px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -204,7 +204,7 @@ kbd {
 .btn.primary {
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.15) inset, 0 4px 14px -6px rgba(var(--accent-rgb), 0.6);
+  box-shadow: none;
 }
 .btn.primary:hover {
   background: color-mix(in oklab, var(--accent) 88%, white);
@@ -297,7 +297,7 @@ textarea.field {
   gap: 5px;
   height: 20px;
   padding: 0 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -421,4 +421,13 @@ input[type="checkbox"],
 input[type="radio"],
 input[type="range"] {
   accent-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

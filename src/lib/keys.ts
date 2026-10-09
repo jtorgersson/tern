@@ -42,6 +42,8 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "s", label: "Flag / unflag", group: "Act" },
   { keys: "u", label: "Toggle read", group: "Act" },
   { keys: "x", label: "Select for bulk action", group: "Act" },
+  { keys: "Ctrl A", label: "Select / clear all loaded messages", group: "Act" },
+  { keys: "Shift click", label: "Select a range of messages", group: "Act" },
   { keys: "U", label: "Unread only", group: "Act" },
   { keys: "c", label: "Compose", group: "Compose" },
   { keys: "r", label: "Reply", group: "Compose" },
@@ -109,8 +111,16 @@ async function replyTo(mode: "reply" | "replyAll" | "forward") {
 }
 
 export function handleKey(e: KeyboardEvent) {
+  if (e.defaultPrevented) return;
   if (app.windowKind === "message") return handleMessageWindowKey(e);
   const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "a" && !isTyping(e) && !app.isCanvasView && !search.open && !app.paletteOpen && !app.settingsOpen && !app.cheatsheetOpen && !app.snoozeTarget && !composer.open && !calendar.composerOpen && !app.agentOpen && !connect.expanded && !(e.target as HTMLElement | null)?.closest("[data-connect]")) {
+    e.preventDefault();
+    app.selectAllLoaded();
+    return;
+  }
+  // Native controls own activation keys; do not also open the selected email.
+  if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement | null)?.closest("button, input, select, a")) return;
 
   // ---- global chords (work while typing) ----
   if (mod && e.key.toLowerCase() === "k") {

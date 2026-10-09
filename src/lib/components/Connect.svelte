@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import DOMPurify from "dompurify";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2, Plus, Mail, CalendarPlus, Search } from "@lucide/svelte";
+  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2, Plus, Mail, CalendarPlus, Search, Pin, PinOff } from "@lucide/svelte";
   import { app } from "$lib/state/app.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { api } from "$lib/api";
@@ -39,6 +39,7 @@
   let unreadOnly = $state(false);
   let entryCursor = $state<number | null>(null);
   let active = $state<Conversation | null>(null);
+  let browsing = $state(false);
   let parent = $state<Conversation | null>(null);
   let rootMessage = $state<ConnectMessage | null>(null);
   let messages = $state<ConnectMessage[]>([]);
@@ -56,6 +57,7 @@
   let accountEpoch = 0;
   const draftKey = $derived(`${accountId}:${JSON.stringify(active?.resource)}`);
   const draft = $derived(drafts[draftKey] ?? "");
+  const pins = $derived(connect.pins.filter(p => p.accountId === accountId && p.conversation.title.toLowerCase().includes(filter.toLowerCase())));
   const unreadCount = $derived(rows.filter(rowUnread).length);
   const visibleRows = $derived(rows.filter(r => rowTitle(r).toLowerCase().includes(filter.toLowerCase()) && (!unreadOnly || listing.kind !== "chats" || rowUnread(r))));
   const firstUnread = $derived(entryCursor === null ? undefined : unreadMessages(messages, accountId, entryCursor)[0]);
@@ -210,6 +212,17 @@
     } catch (e) { if (seq === listSeq) listError = errMsg(e); }
     finally { if (seq === listSeq) listLoading = false; }
   }
+  function rowConversation(row: ConnectChat | ConnectGroup): Conversation {
+    return { title: rowTitle(row), webUrl: row.webUrl, members: "chatType" in row ? row.members : undefined,
+      resource: listing.kind === "channels" ? { kind: "channel", teamId: listing.teamId, channelId: row.id } : { kind: "chat", chatId: row.id } };
+  }
+  function openPin(conversation: Conversation) {
+    parent = null; rootMessage = null;
+    select(conversation);
+  }
+  function hasDraft(row: ConnectChat | ConnectGroup) {
+    return listing.kind !== "teams" && !!drafts[`${accountId}:${JSON.stringify(rowConversation(row).resource)}`]?.trim();
+  }
   function choose(row: ConnectChat | ConnectGroup) {
     if (listing.kind === "teams") {
       groupTitle = rowTitle(row);
@@ -217,12 +230,11 @@
     } else {
       parent = null;
       rootMessage = null;
-      select({ title: rowTitle(row), webUrl: row.webUrl, members: "chatType" in row ? row.members : undefined, resource: listing.kind === "channels"
-        ? { kind: "channel", teamId: listing.teamId, channelId: row.id }
-        : { kind: "chat", chatId: row.id } });
+      select(rowConversation(row));
     }
   }
   function select(conversation: Conversation, messageId?: string) {
+    browsing = false;
     highlighted = messageId ?? null;
     active = conversation;
     const known = connect.read[connect.readKey(accountId, conversation.resource)] || receipt(conversation.resource);
@@ -383,7 +395,7 @@
   {:else if newMode}
     {#key `${accountId}:${wizardVersion}`}<NewConversation {account} initialRecipient={newRecipient} initialDraft={newDraft} {consenting} onEnable={enable} onCancel={() => newMode = false} onCreated={created} />{/key}
   {:else}
-    <div class="workspace" class:has-conversation={!!active}>
+    <div class="workspace" class:has-conversation={!!active} class:browsing>
       <div class="browser">
         <div class="tabs">
           <button class:chosen={listing.kind === "chats"} onclick={() => loadList({ kind: "chats" })}><MessageCircle size={14} />Chats</button>
@@ -401,15 +413,33 @@
         {/if}
         {#if listError}<p class="error" role="alert">{listError}</p>{/if}
         <div class="conversations">
+          {#if pins.length}
+            <div class="section-label">Pinned</div>
+            {#each pins as pin (JSON.stringify(pin.conversation.resource))}
+              <div class="conversation-row">
+                <button class="conversation pinned" class:selected={JSON.stringify(active?.resource) === JSON.stringify(pin.conversation.resource)} onclick={() => openPin(pin.conversation)}>
+                  <Pin size={13} /><span class="conversation-copy"><strong>{pin.conversation.title}</strong></span>
+                </button>
+                <button class="pin-action icon-btn" aria-label={`Unpin ${pin.conversation.title}`} title="Unpin conversation" onclick={() => connect.togglePin(accountId, pin.conversation)}><PinOff size={12} /></button>
+              </div>
+            {/each}
+            <div class="section-label">{listing.kind === "chats" ? "Chats" : "Channels"}</div>
+          {/if}
           {#each visibleRows as row (row.id)}
             {@const selected = active?.resource.kind === "chat" ? active.resource.chatId === row.id : active?.resource.kind === "channel" ? active.resource.channelId === row.id : false}
+            <div class="conversation-row">
             <button class="conversation" class:selected class:unread={rowUnread(row)} aria-label={`${rowTitle(row)}${rowUnread(row) ? ", unread" : ""}`} onclick={() => choose(row)}>
               <span class="conversation-icon">{#if "chatType" in row}<MessageCircle size={16} />{:else}<Hash size={16} />{/if}</span>
-              <span class="conversation-copy"><strong>{rowTitle(row)}</strong>
+              <span class="conversation-copy"><strong>{rowTitle(row)}{#if hasDraft(row)}<em>Draft</em>{/if}</strong>
                 {#if "chatType" in row}<small>{previewText(row.lastMessagePreview?.body?.content || "") || (row.chatType === "meeting" ? "Meeting chat" : "Open conversation")}</small>{/if}
               </span>
               {#if rowUnread(row)}<span class="unread-dot" title="Unread messages" aria-label="Unread messages"></span>{/if}
             </button>
+            {#if listing.kind !== "teams"}
+              {@const pinned = connect.isPinned(accountId, rowConversation(row).resource)}
+              <button class="pin-action icon-btn" class:is-pinned={pinned} aria-label={`${pinned ? "Unpin" : "Pin"} ${rowTitle(row)}`} title={pinned ? "Unpin conversation" : "Pin conversation"} onclick={() => connect.togglePin(accountId, rowConversation(row))}>{#if pinned}<PinOff size={12} />{:else}<Pin size={12} />{/if}</button>
+            {/if}
+            </div>
           {:else}<p class="empty">{listLoading ? "Loading conversations…" : filter ? "No matching conversations." : listError ? "Conversations couldn’t be loaded." : unreadOnly && listing.kind === "chats" ? "You’re caught up on loaded chats." : listing.kind === "teams" ? "No joined teams found." : "No conversations found."}</p>{/each}
           {#if listNext}<button class="load-more" disabled={listLoading} onclick={() => loadList(listing, true)}>Load more conversations</button>{/if}
         </div>
@@ -417,8 +447,10 @@
       <div class="conversation-pane">
         {#if active}
           <div class="conversation-heading">
+            {#if !parent}<button class="icon-btn conversation-switch" aria-label="Back to conversations" title="Back to conversations" onclick={() => browsing = true}><ArrowLeft size={16} /></button>{/if}
             {#if parent}<button class="icon-btn" aria-label="Back to channel" onclick={() => { const p = parent!; parent = null; rootMessage = null; select(p); }}><ArrowLeft size={16} /></button>{/if}
             <div><strong>{active.title}</strong><small>{parent?.title || (active.resource.kind === "channel" ? "Channel posts" : "Microsoft Teams conversation")}</small></div>
+            {#if active.resource.kind === "chat" || active.resource.kind === "channel"}<button class="icon-btn" class:on={connect.isPinned(accountId, active.resource)} aria-label={connect.isPinned(accountId, active.resource) ? "Unpin conversation" : "Pin conversation"} title="Keep this conversation in Pinned" onclick={() => active && connect.togglePin(accountId, active)}><Pin size={14} /></button>{/if}
             <button class="icon-btn" disabled={messageLoading || olderLoading} aria-label="Refresh messages" onclick={() => loadMessages(true)}><RefreshCw size={14} class={messageLoading ? "spin" : ""} /></button>
             <button class="icon-btn" title="Open in Teams for calls, files, and more" aria-label="Open conversation in Teams" onclick={() => external()}><ExternalLink size={14} /></button>
           </div>
@@ -487,6 +519,13 @@
   .tabs .refresh { margin-left: auto; }
   .filter { flex: none; margin: 0 14px 8px; padding: 7px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; color: var(--fg); font-size: 12px; }
   .conversations { overflow-y: auto; min-height: 0; padding: 0 8px 8px; }
+  .section-label { padding: 10px 9px 5px; font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+  .conversation-row { display: flex; align-items: center; position: relative; }
+  .conversation-row .conversation { min-width: 0; padding-right: 32px; }
+  .pin-action { position: absolute; right: 2px; opacity: 0; width: 26px; }
+  .conversation-row:hover .pin-action, .conversation-row:focus-within .pin-action, .pin-action.is-pinned { opacity: 1; }
+  .pinned { color: var(--fg-dim); }
+  .conversation-copy em { font-style: normal; color: var(--accent); font-size: 10px; margin-left: 7px; }
   .conversation { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; border-radius: 7px; }
   .conversation:hover { background: var(--panel); }
   .conversation.selected { background: var(--accent-soft); }
@@ -495,8 +534,8 @@
   .conversation.unread .conversation-copy strong { color: var(--fg-bright); font-weight: 700; }
   .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
   .read-filters { display: flex; gap: 5px; padding: 0 14px 8px; }
-  .read-filters button { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 11px; color: var(--muted); }
-  .read-filters .chosen { background: var(--accent-soft); color: var(--accent); }
+  .read-filters button { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 4px; font-size: 11px; color: var(--muted); }
+  .read-filters .chosen { background: var(--hover); color: var(--fg-bright); box-shadow: inset 0 -2px var(--accent); }
   .badge { font-size: 10px; font-weight: 600; }
   .unread-divider { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 10px; margin: 0 0 16px; scroll-margin-top: 12px; }
   .unread-divider::before, .unread-divider::after { content: ""; height: 1px; flex: 1; background: var(--accent-line); }
@@ -505,6 +544,7 @@
   .conversation-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-back { display: flex; align-items: center; gap: 6px; padding: 0 16px 9px; font-size: 12px; color: var(--muted); }
   .conversation-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .conversation-switch { display: none; }
   .bridges { display: flex; gap: 12px; padding: 5px 14px 9px; border-bottom: 1px solid var(--line); }
   .bridges button { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--accent); }
   .conversation-heading { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -542,5 +582,11 @@
   @container (min-width: 700px) {
     .workspace { flex-direction: row; }
     .browser, .workspace:not(.has-conversation) .browser { width: 260px; flex: none; max-height: none; border-right: 1px solid var(--line); border-bottom: 0; }
+  }
+  @container (max-width: 699px) {
+    .browser, .workspace:not(.has-conversation) .browser { flex: 1; max-height: none; border-bottom: 0; }
+    .has-conversation:not(.browsing) .browser { display: none; }
+    .browsing .conversation-pane, .workspace:not(.has-conversation) .conversation-pane { display: none; }
+    .conversation-switch { display: inline-grid; }
   }
 </style>

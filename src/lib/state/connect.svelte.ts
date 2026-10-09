@@ -1,6 +1,27 @@
 import { readCursor, type Conversation } from "$lib/connect";
+import { parsePins, pinKey, type PinnedConversation } from "$lib/util/pins";
 /** Dock state is independent of mail/calendar navigation. */
 class ConnectState {
+  pins = $state<PinnedConversation[]>([]);
+  isPinned(accountId: string, resource: Conversation["resource"]) {
+    const key = pinKey(accountId, resource);
+    return !!key && this.pins.some(p => pinKey(p.accountId, p.conversation.resource) === key);
+  }
+  togglePin(accountId: string, conversation: Conversation) {
+    const key = pinKey(accountId, conversation.resource);
+    if (!key) return;
+    this.pins = this.isPinned(accountId, conversation.resource)
+      ? this.pins.filter(p => pinKey(p.accountId, p.conversation.resource) !== key)
+      : [...this.pins, { accountId, conversation: { title: conversation.title, resource: conversation.resource } }];
+    this.savePins();
+  }
+  removeAccount(accountId: string) {
+    this.pins = this.pins.filter(p => p.accountId !== accountId);
+    this.savePins();
+  }
+  private savePins() {
+    try { localStorage.setItem("tern.connect.pins", JSON.stringify(this.pins)); } catch {}
+  }
   request = $state<{
     accountId: string;
     conversation?: Conversation;
@@ -29,6 +50,7 @@ class ConnectState {
     try { localStorage.setItem("tern.connect.read", JSON.stringify(this.read)); } catch {}
   }
   constructor() {
+    try { this.pins = parsePins(localStorage.getItem("tern.connect.pins") || "[]"); } catch {}
     try {
       this.open = localStorage.getItem("tern.connect.open") === "true";
       this.width = Math.max(360, Math.min(900, Number(localStorage.getItem("tern.connect.width")) || 480));

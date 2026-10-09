@@ -102,7 +102,7 @@
   <div class="app">
     <TopBar />
     <div class="workspace-row" class:docked={connect.open} class:expanded={connect.open && connect.expanded}>
-      <main style:--list-w="{listWidth}px" class:today={app.isCanvasView} class:no-pane={!app.isCanvasView && !app.readingPane}>
+      <main style:--list-w="{listWidth}px" class:today={app.isCanvasView} class:no-pane={!app.isCanvasView && !app.readingPane} class:has-message={!!app.open || app.openLoading}>
         <Sidebar />
         {#if app.view.kind === "today"}
           <Today />
@@ -189,15 +189,28 @@
   @media (max-width: 1100px) {
     main { grid-template-columns: 210px minmax(280px, 360px) 0 minmax(0, 1fr); }
     main.today, main.no-pane { grid-template-columns: 210px minmax(0, 1fr); }
-    .docked main { min-width: 400px; grid-template-columns: 0 minmax(180px, .8fr) 0 minmax(220px, 1fr); }
-    .docked main.today, .docked main.no-pane { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 1500px) {
+    .docked main { min-width: 600px; grid-template-columns: minmax(280px, .8fr) 0 minmax(320px, 1fr); }
+    .docked main.today, .docked main.no-pane { min-width: 340px; grid-template-columns: minmax(0, 1fr); }
     .docked main :global(.sidebar) { display: none; }
     .docked:not(.expanded) .connect-dock { max-width: 45vw; }
   }
+  @media (max-width: 1100px) {
+    .docked main { min-width: 340px; grid-template-columns: minmax(0, 1fr); }
+    .docked main .resizer { display: none; }
+    .docked main.has-message:not(.no-pane) :global(.list) { display: none; }
+    .docked main:not(.has-message) :global(.reader) { display: none; }
+    .docked main :global(.back-list) { display: inline-flex; }
+  }
   @media (max-width: 820px) {
-    main { grid-template-columns: 0 minmax(260px, 1fr) 0 minmax(0, 1.4fr); }
+    main { grid-template-columns: minmax(0, 1fr); }
     main.today, main.no-pane { grid-template-columns: minmax(0, 1fr); }
     main :global(.sidebar) { display: none; }
+    main .resizer { display: none; }
+    main.has-message:not(.no-pane) :global(.list) { display: none; }
+    main:not(.has-message) :global(.reader) { display: none; }
+    main :global(.back-list) { display: inline-flex; }
   }
   .splash {
     position: fixed;

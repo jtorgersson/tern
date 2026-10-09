@@ -156,8 +156,13 @@ pub struct MessageQuery {
     pub account_id: Option<String>,
     #[serde(default)]
     pub unread_only: bool,
+    #[serde(default)]
+    pub flagged_only: bool,
+    #[serde(default)]
+    pub attachments_only: bool,
     pub limit: i64,
     pub before: Option<String>,
+    pub before_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

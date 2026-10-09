@@ -313,9 +313,13 @@ export interface MessageQuery {
   /** Restrict to one account (optional). */
   accountId?: string | null;
   unreadOnly?: boolean;
+  flaggedOnly?: boolean;
+  attachmentsOnly?: boolean;
   limit: number;
   /** Cursor: ISO receivedAt of the last item of the previous page. */
   before?: string | null;
+  /** Tie-breaker for messages received at the same instant. */
+  beforeId?: string | null;
 }
 
 export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
