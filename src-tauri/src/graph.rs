@@ -686,10 +686,12 @@ pub struct DeltaPage {
     pub delta_link: Option<String>,
 }
 
+/// Delta rejects `$expand` ("Parsing OData Select and Expand failed"), so reply/forward
+/// flags are picked up when a message is opened, sent, or explicitly refreshed instead.
 pub fn initial_delta_url(folder_id: &str) -> String {
     let since = (chrono::Utc::now() - chrono::Duration::days(INITIAL_WINDOW_DAYS)).format("%Y-%m-%dT%H:%M:%SZ");
     format!(
-        "/me/mailFolders/{folder_id}/messages/delta?$select={MSG_SELECT}&$filter=receivedDateTime+ge+{since}&$orderby=receivedDateTime+desc&$expand={RESPONSE_EXPAND}"
+        "/me/mailFolders/{folder_id}/messages/delta?$select={MSG_SELECT}&$filter=receivedDateTime+ge+{since}&$orderby=receivedDateTime+desc"
     )
 }
 
@@ -978,7 +980,7 @@ mod tests {
             assert_eq!((message.is_replied, message.is_forwarded), expected);
         }
         assert_eq!(super::response_flags(&serde_json::json!({})), (false, false));
-        assert!(super::initial_delta_url("inbox").contains("$expand=singleValueExtendedProperties"));
+        assert!(!super::initial_delta_url("inbox").contains("$expand"));
     }
     #[test]
     fn parses_list_unsubscribe() {

@@ -176,8 +176,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             refresh_response_metadata = true;
         }
     }
-    // Delta tokens encode their original query. Start one fresh round with the new
-    // extended-property expansion, keeping the existing messages and bodies cached.
+    // Delta tokens encode their original query. Start one fresh round after the schema
+    // change, keeping the existing messages and bodies cached.
     if refresh_response_metadata {
         response_migration.execute("UPDATE sync_state SET delta_link = NULL", [])?;
     }
