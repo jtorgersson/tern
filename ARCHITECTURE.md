@@ -72,7 +72,7 @@ accounts). A 30 s loop sends a desktop reminder `settings.calendar.reminderMinut
 
 `accounts.connect_compose_consent` separately records the `Chat.Create User.ReadBasic.All` upgrade. Existing Connect accounts retain their original scopes until they reconnect; the directory and creation endpoints require upgraded consent. Directory queries escape OData literals and encode query parameters, return up to 20 matches, and exclude the current user in the UI. Creation validates UUIDs, resolves profiles server-side, deduplicates members including the current user, uses guest roles where Graph reports a guest, and sends a single POST. One-to-one creation reuses existing chats; group creation supports up to 20 other people. The person picker never sends an initial message automatically.
 
-`ConnectAssistant.svelte` streams through `writeConnect` and the existing provider abstraction. Generated output lives in a preview until explicitly accepted; the editable draft stays unchanged while generating. Conversation changes abort the stream. The prompt treats all messages, drafts, and email as untrusted context, bounds history to 40 non-deleted messages / 18,000 characters, and includes the open email only when opted in. Reply and catch-up modes share the pipeline. Catch-up text can prefill an event draft. Conversation/email handoffs preserve existing composer drafts and use participant addresses from the chat (members are fetched for search-opened chats).
+`ConnectAssistant.svelte` streams through `writeConnect` and the existing provider abstraction. Generated output lives in a preview until explicitly accepted; the editable draft stays unchanged while generating. Conversation changes abort the stream. The prompt treats all messages, drafts, and email as untrusted context, bounds history to 40 non-deleted messages / 18,000 characters, and includes the open email only when opted in. `ConversationBrief.svelte` uses the same pipeline in JSON brief mode. `util/connect-experience.ts` captures up to 40 complete, non-deleted, non-system messages within an 18,000-character budget, validates card kinds and source IDs against that snapshot, and rejects malformed responses. Brief cards navigate to local sources; handoffs append to the current reply draft or prefill an event draft. A changed source snapshot exposes a refresh hint. Both components abort generation on conversation changes. Conversation/email handoffs preserve existing composer drafts and use participant addresses from the chat (members are fetched for search-opened chats).
 
 `state/search.svelte.ts` owns unified search independently of mail/calendar navigation. It fans out local message search, account-filtered cached event search, and `/search/query` for the `chatMessage` entity in each enabled account. Request generations isolate obsolete searches; errors and pagination are per source/account. `GlobalSearch.svelte` renders escaped previews and source tabs. Graph search hits are mapped to chat/channel/thread resources; `connect_message` fetches older hits outside the first loaded page. `connect.request` is the account-aware bridge used by both search and the mail reader. Global search keyboard handling suppresses actions on content behind the results.
 
@@ -128,7 +128,7 @@ Pop-out message windows (`O`, Shift+Enter, double-click, toolbar) are the same S
 (`util/windows.ts`, label `msg-<hash>`, `app.initMessageWindow`); they emit `mail://changed` after actions so the main
 window refreshes, and close themselves once the message is archived, deleted or snoozed.
 
-Keyboard: `j/k` next/prev · `Enter`/`o` open · `e` archive · `#` delete · `s` star/flag · `u` toggle read ·
+Keyboard: `j/k` next/prev · `Enter`/`o` open · `e` archive · `v` move · `#` delete · `s` star/flag · `u` toggle read ·
 `r` reply · `R`/`a`… see `src/lib/keys.ts` · `c` compose · `/` search · `g i` inbox · `g s` sent ·
 `Ctrl+K` palette · `Ctrl+J` agent · `Esc` close.
 
@@ -146,6 +146,28 @@ create and edit (occurrence or series) including recurrence presets (`presetRecu
 natural-language input (tests: `bun test src`).
 
 ## Mail extras
+* Attachments out: `OutgoingMessage.attachments[]` (name, contentType, base64 `data`; the composer reads files with
+  `FileReader`, drop/paste included). With files, `graph::send_new` creates a draft (`POST /me/messages`) instead of
+  `sendMail`; replies already go through a draft. `attach_all` posts ≤3 MB files inline as `fileAttachment` and
+  larger ones through `createUploadSession` in 3.75 MB chunks (`upload_large`), then `/send`; a failure deletes the draft.
+  Limits: 25 MB per file / 40 MB per mail in the UI, 50 MB per file in Rust.
+* Attachments in: `attachment_open` downloads once into `~/.cache/tern/attachments/<hash>/<name>` and returns the path
+  (opened with the system opener); `attachment_preview` returns a `data:` URL for images ≤ 6 MB (thumbnails).
+* Draft autosave: the composer writes the draft (minus the `ref` message) to `localStorage["tern.draft"]` 500 ms after
+  each change (attachment bytes only up to 2 MB total); `composer.restore()` on boot brings it back minimized.
+  `discard()` closes with an Undo toast. Autosave is main-window only.
+* Search operators: `db::parse_search` (tested) turns `from: to: subject: has:attachment is:unread|read|flagged
+  in:<folder> before: after: newer: older:` (Swedish aliases too, quoted values ok) into SQL filters; the remaining words
+  go to FTS. Operator-only searches skip junk and trash unless `in:` says otherwise.
+* Person card: `person_summary(email)` → `PersonSummary` (counts both directions, first/last contact, latest mail from
+  them, `waiting` = `followups` filtered to them, `unanswered` = inbox mail from them without a reply, 60 days).
+  `PersonCard.svelte` adds upcoming meetings from the cached calendar and an on-demand AI brief (`personBrief`).
+* Reader: `util/html.ts` `collapseQuotedText` folds the quoted earlier conversation (Gmail/Outlook/Apple/Thunderbird
+  markers, Outlook "From:/Sent:/Subject:" headers, "… wrote:" before a blockquote) behind a toggle button inside the
+  srcdoc; `MailFrame` handles the click (the iframe has no scripts) and reports hovered links to the reader's link bar.
+  `app.readerScale` (localStorage) becomes `body{zoom}` in the srcdoc.
+* Move to folder: `app.moveTarget` + `FolderPicker.svelte` (well-known folders by name, the message's own account's
+  folders by id; several accounts → standard folders only) → `app.moveTo` with the existing Undo toast.
 * Snooze: `snoozes(message_id, until UTC)`. `Db::list` hides snoozed rows from every view except Search and
   `{kind:"snoozed"}`. Snoozing marks read; `sync::start_snooze_waker` (20 s loop) marks them unread again, emits
   `mail://changed` + `snooze://woke` and shows a notification.

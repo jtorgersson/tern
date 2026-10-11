@@ -7,11 +7,12 @@
   import { api } from "$lib/api";
   import { hueColor } from "$lib/theme";
   import { longTime, shortTime } from "$lib/util/time";
-  import { displayName, formatBytes, errMsg } from "$lib/util/misc";
-  import type { Addr, Attachment, MessageFull } from "$lib/types";
-  import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { displayName, errMsg } from "$lib/util/misc";
+  import type { Addr, MessageFull } from "$lib/types";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import Avatar from "./Avatar.svelte";
-  import MailFrame from "./MailFrame.svelte";
+  import MailFrame, { type HoverLink } from "./MailFrame.svelte";
+  import AttachmentCard from "./AttachmentCard.svelte";
   import TldrCard from "./TldrCard.svelte";
   import QuickReply from "./QuickReply.svelte";
   import InviteCard from "./InviteCard.svelte";
@@ -27,8 +28,6 @@
     ReplyAll,
     Forward,
     ExternalLink,
-    Paperclip,
-    Download,
     LoaderCircle,
     AlarmClock,
     MailX,
@@ -36,6 +35,9 @@
     X,
     ChevronUp,
     ArrowLeft,
+    FolderInput,
+    Link2,
+    TriangleAlert,
   } from "@lucide/svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { parseMailto } from "$lib/util/mailto";
@@ -46,6 +48,7 @@
   $effect(() => {
     void app.open?.id;
     unsubDone = null;
+    hover = null;
   });
   async function unsubscribe(msg: MessageFull) {
     const u = msg.unsubscribe;
@@ -118,40 +121,47 @@
       `About “${message.subject || "(no subject)"}”\n\n${message.bodyText.slice(0, 3000)}${message.webLink ? `\n\nEmail: ${message.webLink}` : ""}` });
   }
 
-  function addrList(list: Addr[]): string {
-    return list.map((a) => displayName(a)).join(", ");
-  }
-
-  let saving = $state<string | null>(null);
-  async function save(msg: MessageFull, a: Attachment) {
-    saving = a.id;
+  // ---- link preview (hovering a link in the mail shows where it really goes) ----
+  let hover = $state<HoverLink | null>(null);
+  const hostOf = (s: string) => {
     try {
-      const path = await api.saveAttachment(msg.id, a.id);
-      toasts.show(`Saved ${a.name}`, {
-        kind: "success",
-        timeout: 8000,
-        action: { label: "Open", run: () => openPath(path).catch(() => revealItemInDir(path)) },
-      });
-    } catch (e) {
-      toasts.error(`Could not save ${a.name}: ${errMsg(e)}`);
-    } finally {
-      saving = null;
+      return new URL(/^[a-z]+:/i.test(s) ? s : `https://${s}`).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return "";
     }
-  }
+  };
+  /** The visible text names a site, but the link goes somewhere else. */
+  const hoverMismatch = $derived.by(() => {
+    if (!hover || !/^https?:/i.test(hover.href)) return false;
+    const text = hover.text;
+    if (!/^(https?:\/\/)?[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(text)) return false;
+    const a = hostOf(text);
+    const b = hostOf(hover.href);
+    return !!a && !!b && a !== b && !b.endsWith(`.${a}`) && !a.endsWith(`.${b}`);
+  });
+  const hoverShown = $derived(hover ? hover.href.replace(/^mailto:/i, "✉ ").replace(/^tel:/i, "☎ ") : "");
 </script>
+
+{#snippet person(a: Addr)}
+  <button class="person" onclick={() => app.showPerson(a)} title="Who is {a.email}? (opens the person card)">{displayName(a)}</button>
+{/snippet}
+
+{#snippet people(list: Addr[])}
+  {#each list as a, i (a.email + i)}{#if i > 0}, {/if}{@render person(a)}{/each}
+{/snippet}
 
 {#snippet email(t: MessageFull, primary = false)}
   <div class="msg">
     <header class="msg-head">
-      <Avatar addr={t.from} size={38} />
+      <button class="avatar-btn" onclick={() => app.showPerson(t.from)} aria-label="Who is {displayName(t.from)}?"><Avatar addr={t.from} size={38} /></button>
       <div class="who">
         <div class="line">
-          <span class="name">{displayName(t.from)}</span>
+          <span class="name">{@render person(t.from)}</span>
           <span class="email">{t.from.email}</span>
         </div>
         <div class="line sub">
-          <span>to {addrList(t.to) || "—"}</span>
-          {#if t.cc.length}<span>· cc {addrList(t.cc)}</span>{/if}
+          <span>to {#if t.to.length}{@render people(t.to)}{:else}—{/if}</span>
+          {#if t.cc.length}<span>· cc {@render people(t.cc)}</span>{/if}
         </div>
       </div>
       <time class="mono">{longTime(t.receivedAt)}</time>
@@ -160,7 +170,7 @@
 
     <div class="message-status"><MessageStatus message={t} /></div>
     <div class="content">
-      <MailFrame html={t.bodyHtml} />
+      <MailFrame html={t.bodyHtml} onlink={(l) => (hover = l)} />
     </div>
     {#if !t.meetingType || t.meetingType === "none"}
       <DateChips message={t} />
@@ -169,12 +179,7 @@
     {#if t.attachments.some((a) => !a.isInline)}
       <div class="atts">
         {#each t.attachments.filter((a) => !a.isInline) as a (a.id)}
-          <button class="att" onclick={() => save(t, a)} title="Save to Downloads">
-            <span class="att-ic"><Paperclip size={14} /></span>
-            <span class="att-name">{a.name}</span>
-            <span class="att-size mono">{formatBytes(a.size)}</span>
-            {#if saving === a.id}<LoaderCircle size={13} class="spin" />{:else}<Download size={13} class="dl" />{/if}
-          </button>
+          <AttachmentCard message={t} attachment={a} />
         {/each}
       </div>
     {/if}
@@ -188,6 +193,7 @@
       <div class="group">
         <button class="icon-btn" title="Archive (e)" onclick={() => app.archive([m.id])}><Archive size={16} /></button>
         <button class="icon-btn" title="Delete (#)" onclick={() => app.trash([m.id])}><Trash2 size={16} /></button>
+        <button class="icon-btn" title="Move to folder (v)" onclick={() => app.openMove([m.id])}><FolderInput size={16} /></button>
         <button class="icon-btn" class:on={m.isFlagged} title="Flag (s)" onclick={() => app.toggleFlag([m.id])}>
           <Star size={16} fill={m.isFlagged ? "currentColor" : "none"} />
         </button>
@@ -267,6 +273,13 @@
         </article>
       {/key}
     </div>
+
+    {#if hover}
+      <div class="linkbar" class:warn={hoverMismatch} role="status">
+        {#if hoverMismatch}<TriangleAlert size={12} /><span class="lb-note">Says {hostOf(hover.text)}, goes to</span>{:else}<Link2 size={12} />{/if}
+        <span class="lb-url">{hoverShown}</span>
+      </div>
+    {/if}
   {:else if app.openLoading}
     <div class="placeholder"><LoaderCircle size={20} class="spin" /></div>
   {:else}
@@ -278,6 +291,7 @@
       <div class="ph-keys">
         <span><kbd>j</kbd><kbd>k</kbd> move</span>
         <span><kbd>e</kbd> archive</span>
+        <span><kbd>v</kbd> move to</span>
         <span><kbd>c</kbd> compose</span>
         <span><kbd>^J</kbd> ask Tern</span>
       </div>
@@ -287,6 +301,7 @@
 
 <style>
   .reader {
+    position: relative;
     container-type: inline-size;
     container-name: reader;
     display: flex;
@@ -370,6 +385,14 @@
     gap: 12px;
     padding: 4px 0 14px;
   }
+  .avatar-btn {
+    display: grid;
+    border-radius: 50%;
+    transition: transform 120ms var(--ease);
+  }
+  .avatar-btn:hover {
+    transform: scale(1.06);
+  }
   .who {
     flex: 1;
     min-width: 0;
@@ -386,6 +409,18 @@
   .name {
     font-weight: 620;
     color: var(--fg-bright);
+  }
+  .person {
+    font: inherit;
+    color: inherit;
+    border-radius: 4px;
+    text-decoration: none;
+  }
+  .person:hover {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--accent-line);
+    text-underline-offset: 2px;
   }
   .email {
     font-size: 12px;
@@ -441,42 +476,45 @@
     gap: 8px;
     margin-top: 14px;
   }
-  .att {
+  .linkbar {
+    position: absolute;
+    left: 10px;
+    bottom: 10px;
+    z-index: 2;
     display: flex;
     align-items: center;
-    gap: 9px;
-    height: 36px;
-    padding: 0 12px 0 6px;
-    border-radius: 10px;
-    background: var(--hover);
-    box-shadow: inset 0 0 0 1px var(--line);
-    max-width: 320px;
-    transition: all var(--t);
+    gap: 7px;
+    max-width: calc(100% - 20px);
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    background: var(--raised);
+    box-shadow: var(--shadow-sm);
+    pointer-events: none;
+    animation: fade-up 120ms var(--ease);
   }
-  .att:hover {
-    box-shadow: inset 0 0 0 1px var(--accent-line);
+  .linkbar :global(svg) {
+    color: var(--muted);
+    flex: none;
   }
-  .att-ic {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    background: var(--accent-soft);
-    color: var(--accent);
+  .linkbar.warn {
+    color: var(--fg);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in oklab, var(--red) 40%, transparent);
   }
-  .att-name {
-    font-size: 12.5px;
+  .linkbar.warn :global(svg) {
+    color: var(--red);
+  }
+  .lb-note {
+    color: var(--red);
+    flex: none;
+  }
+  .lb-url {
+    font-family: var(--font-mono);
+    font-size: 11px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-  .att-size {
-    font-size: 10.5px;
-    color: var(--muted);
-  }
-  .att :global(.dl) {
-    color: var(--muted);
   }
   .placeholder {
     flex: 1;

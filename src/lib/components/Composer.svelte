@@ -1,8 +1,8 @@
 <script lang="ts">
   import { app } from "$lib/state/app.svelte";
-  import { composer } from "$lib/state/composer.svelte";
+  import { composer, ATTACHMENT_FILE_MAX } from "$lib/state/composer.svelte";
   import { draftReply, rewrite } from "$lib/ai";
-  import { htmlToText } from "$lib/util/misc";
+  import { htmlToText, formatBytes } from "$lib/util/misc";
   import { hueColor } from "$lib/theme";
   import AddressInput from "./AddressInput.svelte";
   import EmojiPicker from "./EmojiPicker.svelte";
@@ -22,12 +22,21 @@
     Square,
     Trash2,
     ArrowUp,
+    Paperclip,
+    Archive,
+    LoaderCircle,
+    FileText,
+    Image as ImageIcon,
+    File as FileIcon,
+    TriangleAlert,
   } from "@lucide/svelte";
 
   let editor: HTMLDivElement | undefined = $state();
+  let fileInput: HTMLInputElement | undefined = $state();
   let big = $state(false);
   let aiText = $state("");
   let showQuote = $state(false);
+  let dragging = $state(false);
   let emojiRange: Range | null = null;
 
   function rememberCaret() {
@@ -53,6 +62,7 @@
   const title = $derived(
     d ? (d.subject || (d.mode === "new" ? "New message" : d.mode === "forward" ? "Forward" : "Reply")) : "",
   );
+  const totalSize = $derived(d ? d.attachments.reduce((n, a) => n + a.size, 0) : 0);
 
   // Push body into the editor when it changes from outside (open / AI streaming).
   $effect(() => {
@@ -61,6 +71,23 @@
       editor.innerHTML = composer.draft.bodyHtml;
       if (composer.aiBusy) editor.scrollTop = editor.scrollHeight;
     }
+  });
+
+  // Autosave: the draft is written locally while you type, so a crash or restart never loses it.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const draft = composer.draft;
+    if (!draft) return;
+    void draft.accountId;
+    void draft.subject;
+    void draft.bodyHtml;
+    void draft.to.length;
+    void draft.cc.length;
+    void draft.bcc.length;
+    void draft.attachments.length;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => composer.persist(), 500);
+    return () => clearTimeout(saveTimer);
   });
 
   // Focus: replies → body; new → To.
@@ -81,6 +108,47 @@
     editor?.focus();
     document.execCommand(cmd, false, val);
     oninput();
+  }
+
+  // ---- attachments ----
+  function pickFiles() {
+    fileInput?.click();
+  }
+  function onfiles(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    if (input.files?.length) void composer.addFiles(input.files);
+    input.value = "";
+  }
+  function hasFiles(e: DragEvent) {
+    return !!e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+  }
+  function ondragover(e: DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = "copy";
+    dragging = true;
+  }
+  function ondragleave(e: DragEvent) {
+    // Only when the pointer leaves the sheet, not when moving between its children.
+    if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) dragging = false;
+  }
+  function ondrop(e: DragEvent) {
+    dragging = false;
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    void composer.addFiles(e.dataTransfer!.files);
+  }
+  function onpaste(e: ClipboardEvent) {
+    const files = e.clipboardData?.files;
+    if (files?.length) {
+      e.preventDefault();
+      void composer.addFiles(files);
+    }
+  }
+  function fileIcon(type: string) {
+    if (type.startsWith("image/")) return ImageIcon;
+    if (type.includes("pdf") || type.includes("text") || type.includes("document") || type.includes("word")) return FileText;
+    return FileIcon;
   }
 
   // ---- send later ----
@@ -119,7 +187,8 @@
   function onkeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
-      composer.send();
+      // Ctrl+Enter sends; a second Ctrl+Enter after the attachment question sends anyway.
+      composer.send(null, { archive: e.shiftKey && composer.canArchive, force: composer.attachWarning });
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && e.target === editor) {
       e.preventDefault();
@@ -170,18 +239,19 @@
     <button class="pill" onclick={() => (composer.minimized = false)}>
       <span class="pdot"></span>
       <span>{title}</span>
+      {#if d.attachments.length}<Paperclip size={12} />{/if}
       {#if composer.aiBusy}<Sparkles size={12} class="spin" />{/if}
     </button>
   {:else}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="sheet" data-composer class:big {onkeydown}>
+    <div class="sheet" data-composer class:big class:dragging {onkeydown} {ondragover} ondragenter={ondragover} {ondragleave} {ondrop} {onpaste}>
       <header>
         <span class="t">{title}</span>
         <button class="icon-btn s" title="Minimize (Esc)" onclick={() => (composer.minimized = true)}><Minus size={14} /></button>
         <button class="icon-btn s" title={big ? "Dock" : "Expand"} onclick={() => (big = !big)}>
           {#if big}<Minimize2 size={13} />{:else}<Maximize2 size={13} />{/if}
         </button>
-        <button class="icon-btn s" title="Close" onclick={() => composer.close()}><X size={14} /></button>
+        <button class="icon-btn s" title="Close (keeps a copy for a moment to undo)" onclick={() => composer.discard()}><X size={14} /></button>
       </header>
 
       <div class="fields">
@@ -234,6 +304,24 @@
         {/if}
       </div>
 
+      {#if d.attachments.length || composer.attaching}
+        <div class="atts" aria-label="Attachments">
+          {#each d.attachments as a (a.id)}
+            {@const Icon = fileIcon(a.contentType)}
+            <span class="att" title="{a.name} · {formatBytes(a.size)}">
+              <Icon size={13} />
+              <span class="att-name">{a.name}</span>
+              <span class="att-size mono">{formatBytes(a.size)}</span>
+              <button class="att-x" aria-label="Remove {a.name}" onclick={() => composer.removeAttachment(a.id)}><X size={12} /></button>
+            </span>
+          {/each}
+          {#if composer.attaching}
+            <span class="att reading"><LoaderCircle size={13} class="spin" /> Reading {composer.attaching === 1 ? "file" : `${composer.attaching} files`}…</span>
+          {/if}
+          {#if d.attachments.length > 1}<span class="att-total mono">{formatBytes(totalSize)}</span>{/if}
+        </div>
+      {/if}
+
       {#if app.aiReady}
         <div class="ai">
           <form class="ai-in" onsubmit={(e) => { e.preventDefault(); runAi(aiText); }}>
@@ -250,6 +338,15 @@
               <button disabled={composer.aiBusy} onclick={() => runAi(q.text)}>{q.label}</button>
             {/each}
           </div>
+        </div>
+      {/if}
+
+      {#if composer.attachWarning}
+        <div class="warn" role="alert">
+          <TriangleAlert size={14} />
+          <span>You mention an attachment, but nothing is attached.</span>
+          <button class="btn sm" onclick={pickFiles}><Paperclip size={12} /> Attach</button>
+          <button class="btn sm ghost" onclick={() => composer.send(null, { force: true })}>Send anyway</button>
         </div>
       {/if}
 
@@ -272,7 +369,13 @@
             </div>
           {/if}
         </div>
+        {#if composer.canArchive}
+          <button class="btn ghost archive" onclick={() => composer.send(null, { archive: true })} disabled={composer.aiBusy} title="Send, then archive the message you're replying to (Ctrl+Shift+Enter)">
+            <Archive size={13} /> Send & archive
+          </button>
+        {/if}
         <div class="fmt">
+          <button class="icon-btn s" title="Attach files (or drop / paste them here)" aria-label="Attach files" onclick={pickFiles} disabled={composer.aiBusy}><Paperclip size={14} /></button>
           <EmojiPicker onOpen={rememberCaret} onSelect={addEmoji} disabled={composer.aiBusy} />
           <button class="icon-btn s" title="Bold" onclick={() => exec("bold")}><Bold size={14} /></button>
           <button class="icon-btn s" title="Italic" onclick={() => exec("italic")}><Italic size={14} /></button>
@@ -281,8 +384,17 @@
           <button class="icon-btn s" title="Link" onclick={addLink}><Link size={14} /></button>
         </div>
         <span class="spacer"></span>
-        <button class="icon-btn s" title="Discard" onclick={() => composer.close()}><Trash2 size={14} /></button>
+        <button class="icon-btn s" title="Discard" onclick={() => composer.discard()}><Trash2 size={14} /></button>
       </footer>
+      <input bind:this={fileInput} type="file" multiple hidden onchange={onfiles} aria-hidden="true" tabindex="-1" />
+
+      {#if dragging}
+        <div class="drop">
+          <Paperclip size={22} />
+          <span>Drop to attach</span>
+          <span class="hint">Up to {formatBytes(ATTACHMENT_FILE_MAX)} per file</span>
+        </div>
+      {/if}
     </div>
   {/if}
 {/if}
@@ -453,6 +565,81 @@
   .quote :global(img) {
     max-width: 100%;
   }
+  .atts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-top: 1px solid var(--line);
+  }
+  .att {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    max-width: 260px;
+    padding: 0 4px 0 9px;
+    border-radius: 7px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    background: var(--hover);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .att :global(svg) {
+    color: var(--accent);
+    flex: none;
+  }
+  .att-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .att-size {
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .att-x {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    color: var(--muted);
+  }
+  .att-x:hover {
+    color: var(--fg);
+    background: var(--hover);
+  }
+  .att.reading {
+    color: var(--muted);
+    padding-right: 10px;
+  }
+  .att-total {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .warn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 12px 2px;
+    padding: 7px 8px 7px 10px;
+    border-radius: 9px;
+    font-size: 12.5px;
+    color: var(--fg);
+    background: color-mix(in oklab, var(--yellow) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--yellow) 30%, var(--line));
+    animation: fade-up 160ms var(--ease);
+  }
+  .warn :global(svg:first-child) {
+    color: var(--yellow);
+    flex: none;
+  }
+  .warn span {
+    flex: 1;
+  }
   .ai {
     padding: 10px 14px 4px;
     border-top: 1px solid var(--line);
@@ -539,6 +726,14 @@
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
   }
+  .archive {
+    font-size: 12px;
+    color: var(--fg-dim);
+    padding: 0 9px;
+  }
+  .archive:hover {
+    color: var(--fg);
+  }
   .latermenu {
     position: absolute;
     left: 0;
@@ -599,6 +794,32 @@
   }
   .spacer {
     flex: 1;
+  }
+  .drop {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: inherit;
+    color: var(--accent);
+    font-weight: 600;
+    background: color-mix(in oklab, var(--bg) 80%, transparent);
+    outline: 2px dashed var(--accent-line);
+    outline-offset: -10px;
+    pointer-events: none;
+    animation: fade 120ms;
+  }
+  .drop .hint {
+    font-weight: 400;
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
   }
   .pill {
     position: fixed;

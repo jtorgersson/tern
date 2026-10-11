@@ -336,6 +336,30 @@ export interface OutgoingMessage {
   bodyHtml: string;
   /** Send later: UTC ISO ("…Z"); Exchange delivers it then, even with Tern closed. */
   sendAt?: string | null;
+  /** Files to attach. Rust uploads large ones in chunks. */
+  attachments?: OutgoingAttachment[];
+}
+
+export interface OutgoingAttachment {
+  name: string;
+  contentType: string;
+  /** Base64 without the data: prefix. */
+  data: string;
+}
+
+/** What Tern knows locally about one correspondent (person card). */
+export interface PersonSummary {
+  email: string;
+  name: string;
+  received: number;
+  sent: number;
+  firstAt: string | null;
+  lastAt: string | null;
+  recent: MessageSummary[];
+  /** Mail you sent them that they haven't answered. */
+  waiting: MessageSummary[];
+  /** Mail from them in the inbox you haven't replied to. */
+  unanswered: MessageSummary[];
 }
 
 export interface Contact {

@@ -371,6 +371,149 @@ fn fts_query(q: &str) -> String {
         .join(" ")
 }
 
+/// A parsed search box query: free words (full-text) plus operators.
+///
+/// `from:anna` `to:bob` `subject:invoice` `has:attachment` `is:unread|read|flagged|unflagged`
+/// `in:inbox|sent|drafts|archive|trash|junk` `before:2026-10-01` `after:2026-09` `newer:7d` `older:2w`
+/// Values may be quoted: `from:"Anna Berg"`. Anything else is a word for full-text search.
+#[derive(Debug, Default, PartialEq)]
+pub struct SearchSpec {
+    pub terms: Vec<String>,
+    pub from: Vec<String>,
+    pub to: Vec<String>,
+    pub subject: Vec<String>,
+    pub has_attachment: bool,
+    pub read: Option<bool>,
+    pub flagged: Option<bool>,
+    /// `YYYY-MM-DD`; received strictly before this day (local calendar date, compared as text).
+    pub before: Option<String>,
+    /// `YYYY-MM-DD`; received on or after this day.
+    pub after: Option<String>,
+    /// Well-known folder name.
+    pub folder: Option<String>,
+}
+
+impl SearchSpec {
+    pub fn has_filters(&self) -> bool {
+        !self.from.is_empty()
+            || !self.to.is_empty()
+            || !self.subject.is_empty()
+            || self.has_attachment
+            || self.read.is_some()
+            || self.flagged.is_some()
+            || self.before.is_some()
+            || self.after.is_some()
+            || self.folder.is_some()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty() && !self.has_filters()
+    }
+}
+
+/// Splits on whitespace but keeps `"quoted strings"` (also after an operator: `from:"a b"`) together.
+fn search_tokens(q: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in q.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// `2026-10-01` → as is; `2026-10` → first of month; `2026` → Jan 1; `7d` / `2w` / `3m` / `1y` → relative to `today`.
+fn search_date(v: &str, today: chrono::NaiveDate) -> Option<String> {
+    let v = v.trim();
+    if let Some((n, unit)) = v.char_indices().last().map(|(i, _)| v.split_at(i)).filter(|(_, u)| u.chars().all(|c| c.is_ascii_alphabetic())) {
+        if let Ok(n) = n.parse::<i64>() {
+            let days = match unit {
+                "d" => n,
+                "w" => n * 7,
+                "m" => n * 30,
+                "y" => n * 365,
+                _ => return None,
+            };
+            return Some((today - chrono::Duration::days(days)).format("%Y-%m-%d").to_string());
+        }
+    }
+    let parts: Vec<&str> = v.split('-').collect();
+    let num = |s: &str| s.parse::<u32>().ok();
+    match parts.as_slice() {
+        [y] if y.len() == 4 => num(y).map(|y| format!("{y:04}-01-01")),
+        [y, m] if y.len() == 4 => Some(format!("{:04}-{:02}-01", num(y)?, num(m)?.clamp(1, 12))),
+        [y, m, d] if y.len() == 4 => Some(format!("{:04}-{:02}-{:02}", num(y)?, num(m)?.clamp(1, 12), num(d)?.clamp(1, 31))),
+        _ => None,
+    }
+}
+
+pub fn parse_search(q: &str) -> SearchSpec {
+    parse_search_at(q, chrono::Local::now().date_naive())
+}
+
+pub fn parse_search_at(q: &str, today: chrono::NaiveDate) -> SearchSpec {
+    let mut s = SearchSpec::default();
+    for tok in search_tokens(q) {
+        let Some((op, val)) = tok.split_once(':').filter(|(op, val)| !op.is_empty() && !val.is_empty() && op.chars().all(|c| c.is_ascii_alphabetic())) else {
+            s.terms.push(tok);
+            continue;
+        };
+        let val_l = val.to_lowercase();
+        match op.to_ascii_lowercase().as_str() {
+            "from" | "från" => s.from.push(val_l),
+            "to" | "till" => s.to.push(val_l),
+            "subject" | "ämne" => s.subject.push(val_l),
+            "has" if matches!(val_l.as_str(), "attachment" | "attachments" | "file" | "files" | "bilaga") => s.has_attachment = true,
+            "is" => match val_l.as_str() {
+                "unread" | "oläst" => s.read = Some(false),
+                "read" | "läst" => s.read = Some(true),
+                "flagged" | "starred" | "flaggad" => s.flagged = Some(true),
+                "unflagged" => s.flagged = Some(false),
+                _ => s.terms.push(tok),
+            },
+            "in" | "folder" => {
+                s.folder = match val_l.as_str() {
+                    "inbox" | "inkorg" => Some("inbox"),
+                    "sent" | "sentitems" | "skickat" => Some("sentitems"),
+                    "drafts" | "utkast" => Some("drafts"),
+                    "archive" | "arkiv" => Some("archive"),
+                    "trash" | "deleted" | "deleteditems" | "bin" | "papperskorg" => Some("deleteditems"),
+                    "junk" | "spam" | "junkemail" | "skräppost" => Some("junkemail"),
+                    _ => None,
+                }
+                .map(String::from);
+                if s.folder.is_none() {
+                    s.terms.push(tok);
+                }
+            }
+            "before" | "older" | "före" => match search_date(&val_l, today) {
+                Some(d) => s.before = Some(d),
+                None => s.terms.push(tok),
+            },
+            "after" | "newer" | "since" | "efter" => match search_date(&val_l, today) {
+                Some(d) => s.after = Some(d),
+                None => s.terms.push(tok),
+            },
+            _ => s.terms.push(tok),
+        }
+    }
+    s
+}
+
+fn like_contains(v: &str) -> String {
+    format!("%{}%", v.replace('%', "").replace('_', ""))
+}
+
 impl Db {
     pub fn path() -> PathBuf {
         dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("tern").join("tern.db")
@@ -753,12 +896,54 @@ impl Db {
                 wh.push("m.id IN (SELECT message_id FROM snoozes)".into());
             }
             MessageView::Search { query } => {
-                let fq = fts_query(query);
-                if fq.is_empty() {
+                let spec = parse_search(query);
+                if spec.is_empty() {
                     return Ok(vec![]);
                 }
-                wh.push("m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)".into());
-                args.push(fq.into());
+                let fq = fts_query(&spec.terms.join(" "));
+                let has_words = !fq.is_empty();
+                if has_words {
+                    wh.push("m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)".into());
+                    args.push(fq.into());
+                }
+                for f in &spec.from {
+                    wh.push("(lower(m.from_email) LIKE ? OR lower(m.from_name) LIKE ?)".into());
+                    args.extend([like_contains(f).into(), like_contains(f).into()]);
+                }
+                for t in &spec.to {
+                    wh.push("(lower(m.to_json) LIKE ? OR lower(m.cc_json) LIKE ?)".into());
+                    args.extend([like_contains(t).into(), like_contains(t).into()]);
+                }
+                for s in &spec.subject {
+                    wh.push("lower(m.subject) LIKE ?".into());
+                    args.push(like_contains(s).into());
+                }
+                if spec.has_attachment {
+                    wh.push("m.has_attachments = 1".into());
+                }
+                if let Some(read) = spec.read {
+                    wh.push(format!("m.is_read = {}", read as i64));
+                }
+                if let Some(flagged) = spec.flagged {
+                    wh.push(format!("m.is_flagged = {}", flagged as i64));
+                }
+                if let Some(d) = &spec.before {
+                    wh.push("m.received_at < ?".into());
+                    args.push(d.clone().into());
+                }
+                if let Some(d) = &spec.after {
+                    wh.push("m.received_at >= ?".into());
+                    args.push(d.clone().into());
+                }
+                if let Some(wk) = &spec.folder {
+                    wh.push("m.folder_id IN (SELECT id FROM folders WHERE well_known = ?)".into());
+                    args.push(wk.clone().into());
+                } else {
+                    // Operator-only searches (no words) should not surface junk or trash by default.
+                    if !has_words {
+                        wh.push("m.folder_id NOT IN (SELECT id FROM folders WHERE well_known IN ('deleteditems','junkemail'))".into());
+                    }
+                }
             }
         }
         // Snoozed mail stays out of every mailbox view until it wakes (search still finds it).
@@ -1204,11 +1389,186 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    /// Everything cached about one correspondent, for the person card.
+    pub fn person(&self, email: &str, limit: i64) -> Result<PersonSummary> {
+        let email = email.trim().to_lowercase();
+        let addr_like = format!("%\"email\":\"{}\"%", email.replace('%', "").replace('_', "").replace('"', ""));
+        let limit = limit.clamp(1, 50);
+        let c = self.conn();
+        const NOT_JUNK: &str = "m.folder_id NOT IN (SELECT id FROM folders WHERE well_known IN ('deleteditems','junkemail','drafts')) AND m.is_draft = 0";
+        let (received, first_in, last_in): (i64, Option<String>, Option<String>) = c.query_row(
+            &format!("SELECT count(*), min(m.received_at), max(m.received_at) FROM messages m WHERE lower(m.from_email) = ?1 AND {NOT_JUNK}"),
+            [&email],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let (sent, first_out, last_out): (i64, Option<String>, Option<String>) = c.query_row(
+            "SELECT count(*), min(m.received_at), max(m.received_at) FROM messages m
+             JOIN folders f ON f.id = m.folder_id AND f.well_known = 'sentitems'
+             WHERE m.is_draft = 0 AND (lower(m.to_json) LIKE ?1 OR lower(m.cc_json) LIKE ?1)",
+            [&addr_like],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let name: String = c
+            .query_row(
+                "SELECT from_name FROM messages WHERE lower(from_email) = ?1 AND from_name <> '' ORDER BY received_at DESC LIMIT 1",
+                [&email],
+                |r| r.get(0),
+            )
+            .optional()?
+            .or_else(|| {
+                c.query_row("SELECT name FROM contacts WHERE email = ?1", [&email], |r| r.get(0)).optional().ok().flatten()
+            })
+            .unwrap_or_default();
+        let recent = {
+            let sql = format!(
+                "SELECT {SUMMARY_COLS} FROM messages m LEFT JOIN annotations a ON a.message_id = m.id
+                 WHERE lower(m.from_email) = ?1 AND {NOT_JUNK}
+                 ORDER BY m.received_at DESC LIMIT ?2"
+            );
+            let mut st = c.prepare(&sql)?;
+            let rows = st.query_map(params![email, limit], summary_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        let unanswered = {
+            let sql = format!(
+                "SELECT {SUMMARY_COLS} FROM messages m LEFT JOIN annotations a ON a.message_id = m.id
+                 WHERE lower(m.from_email) = ?1
+                   AND m.folder_id IN (SELECT id FROM folders WHERE well_known = 'inbox')
+                   AND m.is_replied = 0
+                   AND m.received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-60 days')
+                   AND m.id NOT IN (SELECT message_id FROM snoozes)
+                   AND NOT EXISTS (
+                     SELECT 1 FROM messages r
+                     WHERE r.account_id = m.account_id AND r.conversation_id = m.conversation_id AND m.conversation_id <> ''
+                       AND r.received_at > m.received_at AND lower(r.from_email) <> ?1)
+                 ORDER BY m.received_at DESC LIMIT 5"
+            );
+            let mut st = c.prepare(&sql)?;
+            let rows = st.query_map([&email], summary_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        drop(c);
+        let waiting = self
+            .followups(60, 200)?
+            .into_iter()
+            .filter(|m| m.to.iter().any(|a| a.email.eq_ignore_ascii_case(&email)))
+            .take(5)
+            .collect();
+        let min = |a: Option<String>, b: Option<String>| match (a, b) {
+            (Some(x), Some(y)) => Some(if x < y { x } else { y }),
+            (x, y) => x.or(y),
+        };
+        let max = |a: Option<String>, b: Option<String>| match (a, b) {
+            (Some(x), Some(y)) => Some(if x > y { x } else { y }),
+            (x, y) => x.or(y),
+        };
+        Ok(PersonSummary {
+            email,
+            name,
+            received,
+            sent,
+            first_at: min(first_in, first_out),
+            last_at: max(last_in, last_out),
+            recent,
+            waiting,
+            unanswered,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn day(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn search_operators_parse_and_leave_words_for_fulltext() {
+        let s = parse_search_at(r#"invoice from:"Anna Berg" to:bob@x.se has:attachment is:unread in:sent before:2026-10 after:2w subject:q3 wordy"#, day(2026, 10, 11));
+        assert_eq!(s.terms, vec!["invoice", "wordy"]);
+        assert_eq!(s.from, vec!["anna berg"]);
+        assert_eq!(s.to, vec!["bob@x.se"]);
+        assert_eq!(s.subject, vec!["q3"]);
+        assert!(s.has_attachment);
+        assert_eq!(s.read, Some(false));
+        assert_eq!(s.folder.as_deref(), Some("sentitems"));
+        assert_eq!(s.before.as_deref(), Some("2026-10-01"));
+        assert_eq!(s.after.as_deref(), Some("2026-09-27"));
+        // Unknown operators, years, URLs with colons and a lone colon stay searchable words.
+        let s = parse_search_at("foo:bar http://x.se is:odd before:2025 :", day(2026, 10, 11));
+        assert_eq!(s.terms, vec!["foo:bar", "http://x.se", "is:odd", ":"]);
+        assert_eq!(s.before.as_deref(), Some("2025-01-01"));
+        assert!(parse_search_at("   ", day(2026, 10, 11)).is_empty());
+        assert!(!parse_search_at("is:flagged", day(2026, 10, 11)).is_empty());
+    }
+
+    #[test]
+    fn search_filters_select_by_sender_recipient_state_and_date() {
+        let db = mem();
+        seed(&db);
+        let mut a = msg("a", "inbox", "Invoice Q3", "2026-10-09T10:00:00Z");
+        a.has_attachments = true;
+        let mut b = msg("b", "inbox", "Lunch", "2026-09-01T10:00:00Z");
+        b.from = Addr { name: "Bob".into(), email: "bob@x.se".into() };
+        b.is_read = true;
+        let mut sent = msg("s", "arch", "Re: Lunch", "2026-09-02T10:00:00Z");
+        sent.from = Addr { name: "John".into(), email: "john@emcap.se".into() };
+        sent.to = vec![Addr { name: "Bob".into(), email: "bob@x.se".into() }];
+        sent.is_read = true;
+        db.upsert_messages(&[a, b, sent]).unwrap();
+        let q = |query: &str| -> Vec<String> {
+            let mut q = MessageQuery { view: MessageView::Search { query: query.into() }, account_id: None, unread_only: false, flagged_only: false, attachments_only: false, limit: 50, before: None, before_id: None };
+            q.limit = 50;
+            db.list(&q).unwrap().into_iter().map(|m| m.id).collect()
+        };
+        assert_eq!(q("from:bob"), vec!["b"]);
+        assert_eq!(q("from:lindström"), vec!["a"]);
+        assert_eq!(q("to:bob@x.se"), vec!["s"]);
+        assert_eq!(q("has:attachment"), vec!["a"]);
+        assert_eq!(q("is:read"), vec!["s", "b"]);
+        assert_eq!(q("is:unread"), vec!["a"]);
+        assert_eq!(q("before:2026-10-01"), vec!["s", "b"]);
+        assert_eq!(q("after:2026-10-01"), vec!["a"]);
+        assert_eq!(q("subject:lunch in:archive"), vec!["s"]);
+        assert_eq!(q("invoice is:unread"), vec!["a"]);
+        assert!(q("invoice from:bob").is_empty());
+    }
+
+    #[test]
+    fn person_summary_counts_both_directions_and_open_loops() {
+        let db = mem();
+        seed(&db);
+        db.replace_folders("a1", &[fold("inbox", Some("inbox")), fold("sent", Some("sentitems")), fold("del", Some("deleteditems"))]).unwrap();
+        let now = chrono::Utc::now();
+        let at = |days_ago: i64| (now - chrono::Duration::days(days_ago)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut asked = msg("asked", "inbox", "Can you review?", &at(3));
+        asked.conversation_id = "c-asked".into();
+        let mut old = msg("old", "inbox", "Earlier", &at(70));
+        old.conversation_id = "c-old".into();
+        let mut junk = msg("junk", "del", "Deleted", &at(1));
+        junk.conversation_id = "c-junk".into();
+        let mut mine = msg("mine", "sent", "Ping", &at(2));
+        mine.conversation_id = "c-mine".into();
+        mine.from = Addr { name: "John".into(), email: "john@emcap.se".into() };
+        mine.to = vec![Addr { name: "Åsa".into(), email: "ASA@example.se".into() }];
+        db.upsert_messages(&[asked, old, junk, mine]).unwrap();
+        let p = db.person("asa@example.se", 10).unwrap();
+        assert_eq!(p.name, "Åsa Lindström");
+        assert_eq!(p.received, 2);
+        assert_eq!(p.sent, 1);
+        assert_eq!(p.recent.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["asked", "old"]);
+        assert_eq!(p.unanswered.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["asked"]);
+        assert_eq!(p.waiting.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["mine"]);
+        assert_eq!(p.first_at.as_deref(), Some(at(70).as_str()));
+        assert_eq!(p.last_at.as_deref(), Some(at(2).as_str()));
+    }
+
+    fn fold(id: &str, wk: Option<&str>) -> Folder {
+        Folder { id: id.into(), account_id: "a1".into(), name: id.into(), well_known: wk.map(String::from), parent_id: None, unread: 0, total: 0 }
+    }
 
     #[test]
     fn confirmed_responses_survive_sync_and_keep_both_actions() {

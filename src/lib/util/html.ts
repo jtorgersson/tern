@@ -15,6 +15,98 @@ export interface RenderOptions {
   fg: string;
   link: string;
   font: string;
+  /** Text zoom (1 = normal). */
+  scale?: number;
+  /** Fold the quoted earlier messages behind a "Show quoted text" toggle (default true). */
+  collapseQuotes?: boolean;
+}
+
+/** Markers mail clients put on the quoted earlier conversation, most specific first. */
+const QUOTE_SELECTORS = [
+  "blockquote[type=cite]",
+  ".gmail_quote",
+  "#divRplyFwdMsg",
+  "#x_divRplyFwdMsg",
+  "#appendonsend",
+  ".yahoo_quoted",
+  ".moz-cite-prefix",
+  "blockquote.protonmail_quote",
+  "[id^=mail-editor-reference-message-container]",
+  "#reply-intro",
+  ".zmail_extra",
+];
+const OUTLOOK_HEAD = /^(From|Från|Von|De|Fra):/;
+const OUTLOOK_HEAD_FIELDS = [/(Sent|Skickat|Gesendet|Date|Datum|Envoyé):/, /(Subject|Ämne|Betreff|Objet|Emne):/];
+const WROTE = /(wrote|skrev|schrieb|a écrit|escribió):?\s*$/;
+
+function hasContentBefore(node: Element): boolean {
+  for (let p = node.previousSibling; p; p = p.previousSibling) {
+    if (p.nodeType === Node.TEXT_NODE && (p.textContent ?? "").trim()) return true;
+    if (p.nodeType === Node.ELEMENT_NODE) {
+      const el = p as Element;
+      if ((el.textContent ?? "").trim() || el.querySelector("img")) return true;
+    }
+  }
+  return false;
+}
+
+/** The element where the quoted earlier conversation starts, or null. */
+function findQuoteStart(body: HTMLElement): Element | null {
+  for (const sel of QUOTE_SELECTORS) {
+    const el = body.querySelector(sel);
+    if (el) return el;
+  }
+  // Outlook desktop / mobile: a header block "From: … Sent: … Subject: …" followed by the old mail.
+  for (const el of body.querySelectorAll("div, p, table")) {
+    const t = (el.textContent ?? "").trim();
+    if (t.length < 700 && OUTLOOK_HEAD.test(t) && OUTLOOK_HEAD_FIELDS.every((re) => re.test(t))) return el;
+  }
+  // "On <date>, <name> wrote:" line right before a blockquote (Apple Mail, Thunderbird, Gmail plain text).
+  for (const bq of body.querySelectorAll("blockquote")) {
+    const prev = bq.previousElementSibling;
+    if (prev && WROTE.test((prev.textContent ?? "").trim().slice(-40))) return prev;
+  }
+  return null;
+}
+
+/**
+ * Moves the quoted earlier messages into a hidden `.tern-quote` block behind a toggle, so a reply
+ * shows just the new words. Nothing is removed: the toggle reveals it. Leaves the mail alone when the
+ * whole body is a quote (a forward without comment) or no quote is recognized.
+ */
+export function collapseQuotedText(body: HTMLElement): boolean {
+  const start = findQuoteStart(body);
+  if (!start) return false;
+  // Climb while nothing precedes the node in its parent: the wrapper div is part of the quote.
+  let node: Element = start;
+  while (node.parentElement && node.parentElement !== body && !hasContentBefore(node)) node = node.parentElement;
+  if (!hasContentBefore(node)) return false;
+  const parent = node.parentElement;
+  if (!parent) return false;
+  const doc = body.ownerDocument;
+  const wrap = doc.createElement("div");
+  wrap.className = "tern-quote";
+  wrap.setAttribute("hidden", "");
+  const toggle = doc.createElement("button");
+  toggle.className = "tern-quote-toggle";
+  toggle.type = "button";
+  toggle.textContent = "··· Show quoted text";
+  parent.insertBefore(toggle, node);
+  parent.insertBefore(wrap, node);
+  let n: ChildNode | null = node;
+  while (n) {
+    const next: ChildNode | null = n.nextSibling;
+    wrap.appendChild(n);
+    n = next;
+  }
+  if (!(wrap.textContent ?? "").trim() && !wrap.querySelector("img")) {
+    // Nothing worth hiding: undo.
+    while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
+    wrap.remove();
+    toggle.remove();
+    return false;
+  }
+  return true;
 }
 
 const REMOTE = /^(https?:)?\/\//i;
@@ -73,6 +165,17 @@ export function renderMail(html: string, opts: RenderOptions): RenderedMail {
         .replace(/@import[^;]+;/gi, "")
         .replace(/url\(\s*['"]?(https?:)?\/\/[^)]*\)/gi, "none");
 
+  // Fold the quoted earlier messages (post-sanitize: our own toggle button must survive).
+  let folded = styled;
+  if (opts.collapseQuotes !== false) {
+    try {
+      const doc = new DOMParser().parseFromString(`<!doctype html><body>${styled}`, "text/html");
+      if (collapseQuotedText(doc.body)) folded = doc.body.innerHTML;
+    } catch {
+      folded = styled;
+    }
+  }
+
   const designed =
     !isPlain &&
     (/bgcolor\s*=\s*["']?#?(?!fff|ffffff|white)/i.test(styled) ||
@@ -91,6 +194,11 @@ export function renderMail(html: string, opts: RenderOptions): RenderedMail {
     blockquote{margin:0.6em 0;padding-left:12px;border-left:3px solid rgba(127,127,127,.35);opacity:.85;}
     a{word-break:break-word;}
     img[data-blocked-src]{display:none;}img[data-blocked-src][width]:not([width="0"]):not([width="1"]){display:inline-block;min-height:16px;background:rgba(127,127,127,.12);border-radius:4px;}
+    .tern-quote[hidden]{display:none;}
+    .tern-quote-toggle{display:inline-block;margin:10px 0 4px;padding:3px 10px;border:0;border-radius:999px;font:inherit;font-size:11.5px;letter-spacing:.01em;cursor:pointer;color:rgba(127,127,127,1);background:rgba(127,127,127,.14);}
+    .tern-quote-toggle:hover{background:rgba(127,127,127,.24);}
+    .tern-quote{margin-top:8px;}
+    body{zoom:${opts.scale && opts.scale !== 1 ? opts.scale : 1};}
   `;
   const theme = paper
     ? `body{background:#ffffff;color:#1d2228;padding:28px 32px;} a{color:#2259c7;}`
@@ -100,7 +208,7 @@ export function renderMail(html: string, opts: RenderOptions): RenderedMail {
 
   const srcdoc = `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
-<style>${base}${theme}</style></head><body>${styled}</body></html>`;
+<style>${base}${theme}</style></head><body>${folded}</body></html>`;
 
   return { srcdoc, blockedImages, designed };
 }

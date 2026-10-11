@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import DOMPurify from "dompurify";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2, Plus, Mail, CalendarPlus, Search, Pin, PinOff } from "@lucide/svelte";
+  import { MessageCircle, Hash, ArrowLeft, ExternalLink, RefreshCw, Send, X, Maximize2, Minimize2, Plus, Mail, CalendarPlus, Search, Pin, PinOff, Users, Copy, Quote, ChevronUp, ChevronDown, ArrowDown, Check } from "@lucide/svelte";
   import { app } from "$lib/state/app.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { api } from "$lib/api";
@@ -15,6 +15,8 @@
   import { toasts } from "$lib/state/toasts.svelte";
   import NewConversation from "./NewConversation.svelte";
   import ConnectAssistant from "./ConnectAssistant.svelte";
+  import ConversationBrief from "./ConversationBrief.svelte";
+  import { MESSAGE_LIMIT, messageText, matchesMessage, quotedText, dayKey } from "$lib/util/connect-experience";
   import EmojiPicker from "./EmojiPicker.svelte";
   import { insertEmoji } from "$lib/util/emoji";
 
@@ -36,7 +38,16 @@
   let listLoading = $state(false);
   let listError = $state("");
   let filter = $state("");
-  let unreadOnly = $state(false);
+  let readFilter = $state<"all" | "unread" | "drafts">("all");
+  let quotes = $state<Record<string, ConnectMessage | undefined>>({});
+  let findOpen = $state(false);
+  let messageQuery = $state("");
+  let matchIndex = $state(0);
+  let findInput: HTMLInputElement | undefined = $state();
+  let peopleOpen = $state(false);
+  let briefOpen = $state(false);
+  let nearLatest = $state(true);
+  let refreshedAt = $state("");
   let entryCursor = $state<number | null>(null);
   let active = $state<Conversation | null>(null);
   let browsing = $state(false);
@@ -57,9 +68,28 @@
   let accountEpoch = 0;
   const draftKey = $derived(`${accountId}:${JSON.stringify(active?.resource)}`);
   const draft = $derived(drafts[draftKey] ?? "");
-  const pins = $derived(connect.pins.filter(p => p.accountId === accountId && p.conversation.title.toLowerCase().includes(filter.toLowerCase())));
+  const allPins = $derived(connect.pins.filter(p => {
+    if (p.accountId !== accountId) return false;
+    const row = pinnedRow(p.conversation);
+    const text = `${row ? rowTitle(row) : p.conversation.title} ${row ? rowPreview(row) : ""} ${drafts[`${accountId}:${JSON.stringify(p.conversation.resource)}`] || ""}`;
+    return text.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase());
+  }));
+  const quoteMessage = $derived(quotes[draftKey]);
+  const outgoingLength = $derived(quotedText(quoteMessage, draft).length);
+  const matches = $derived(messageQuery.trim() ? messages.filter(m => matchesMessage(m, messageQuery)) : []);
+  const selectedMatch = $derived(matches.length ? matches[matchIndex % matches.length] : undefined);
+  const pins = $derived(allPins.filter(p => {
+    const row = rows.find(r => "chatType" in r && p.conversation.resource.kind === "chat" && r.id === p.conversation.resource.chatId);
+    return readFilter === "all" || (readFilter === "drafts" ? !!drafts[`${accountId}:${JSON.stringify(p.conversation.resource)}`]?.trim() : !!row && rowUnread(row));
+  }));
   const unreadCount = $derived(rows.filter(rowUnread).length);
-  const visibleRows = $derived(rows.filter(r => rowTitle(r).toLowerCase().includes(filter.toLowerCase()) && (!unreadOnly || listing.kind !== "chats" || rowUnread(r))));
+  const draftCount = $derived(rows.filter(hasDraft).length);
+  const visibleRows = $derived(rows.filter(r => {
+    const text = `${rowTitle(r)} ${"chatType" in r ? previewText(r.lastMessagePreview?.body?.content || "") : ""} ${drafts[`${accountId}:${JSON.stringify(rowConversation(r).resource)}`] || ""}`;
+    return text.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()) &&
+      (listing.kind !== "chats" || readFilter === "all" || (readFilter === "unread" ? rowUnread(r) : hasDraft(r))) &&
+      (listing.kind === "teams" || !pins.some(p => JSON.stringify(p.conversation.resource) === JSON.stringify(rowConversation(r).resource)));
+  }).sort((a, b) => "chatType" in a && "chatType" in b ? readCursor(b.lastMessagePreview?.createdDateTime) - readCursor(a.lastMessagePreview?.createdDateTime) : 0));
   const firstUnread = $derived(entryCursor === null ? undefined : unreadMessages(messages, accountId, entryCursor)[0]);
   const pending = $derived(active ? unreadMessages(messages, accountId, Math.max(currentCursor(active.resource), entryCursor ?? 0)) : []);
 
@@ -77,7 +107,8 @@
     return !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
   }
   function readVisible() {
-    if (!active || messageLoading || !connect.open || document.visibilityState !== "visible" || !atBottom()) return;
+    nearLatest = atBottom();
+    if (!active || browsing || newMode || findOpen || messageLoading || !connect.open || document.visibilityState !== "visible" || !atBottom()) return;
     const last = messages[messages.length - 1];
     if (last) connect.markRead(accountId, active.resource, last.createdDateTime);
   }
@@ -115,9 +146,10 @@
     messageLoading = olderLoading = false;
     consentError = listError = messageError = sendError = "";
     filter = "";
-    unreadOnly = false;
+    readFilter = "all";
+    listLoading = false;
     entryCursor = null;
-    if (id && enabled) void loadList({ kind: "chats" });
+    if (id && enabled) untrack(() => { void loadList({ kind: "chats" }); });
   });
   $effect(() => {
     // Poll only while mounted/open, and pause when the app is in the background.
@@ -197,9 +229,10 @@
     const seq = ++listSeq;
     const id = accountId;
     const next = more ? listNext : null;
+    const hadRows = rows.length > 0;
     if (more && !next) return;
     listing = resource;
-    if (!more && !silent) { rows = []; listNext = null; filter = ""; }
+    if (!more && !silent) { rows = []; listNext = null; filter = ""; readFilter = "all"; }
     listLoading = true;
     if (!silent) listError = "";
     try {
@@ -207,7 +240,7 @@
       if (seq !== listSeq || id !== accountId) return;
       rows = more || silent ? [...new Map([...rows, ...page.value].map(r => [r.id, r])).values()] : page.value;
       // A background first-page refresh must not reset an older pagination cursor.
-      if (!silent) listNext = page["@odata.nextLink"] ?? null;
+      if (!silent || !hadRows) listNext = page["@odata.nextLink"] ?? null;
       listError = "";
     } catch (e) { if (seq === listSeq) listError = errMsg(e); }
     finally { if (seq === listSeq) listLoading = false; }
@@ -216,9 +249,13 @@
     return { title: rowTitle(row), webUrl: row.webUrl, members: "chatType" in row ? row.members : undefined,
       resource: listing.kind === "channels" ? { kind: "channel", teamId: listing.teamId, channelId: row.id } : { kind: "chat", chatId: row.id } };
   }
+  function pinnedRow(conversation: Conversation): ConnectChat | undefined {
+    return rows.find((r): r is ConnectChat => "chatType" in r && conversation.resource.kind === "chat" && r.id === conversation.resource.chatId);
+  }
   function openPin(conversation: Conversation) {
     parent = null; rootMessage = null;
-    select(conversation);
+    const row = pinnedRow(conversation);
+    select(row ? { ...conversation, title: rowTitle(row), members: row.members, webUrl: row.webUrl } : conversation);
   }
   function hasDraft(row: ConnectChat | ConnectGroup) {
     return listing.kind !== "teams" && !!drafts[`${accountId}:${JSON.stringify(rowConversation(row).resource)}`]?.trim();
@@ -236,6 +273,7 @@
   function select(conversation: Conversation, messageId?: string) {
     browsing = false;
     highlighted = messageId ?? null;
+    findOpen = peopleOpen = briefOpen = false; messageQuery = ""; matchIndex = 0; refreshedAt = ""; nearLatest = true;
     active = conversation;
     const known = connect.read[connect.readKey(accountId, conversation.resource)] || receipt(conversation.resource);
     entryCursor = known ? currentCursor(conversation.resource) : null;
@@ -261,11 +299,73 @@
       if (active) active = { ...active, members };
     } catch (e) { if (epoch === accountEpoch && active?.resource.kind === "chat" && active.resource.chatId === chatId) messageError = `Could not load participants: ${errMsg(e)}`; }
   }
-  function quote(message: ConnectMessage) {
+  async function quote(message: ConnectMessage) {
     if (active?.resource.kind === "channel") replies(message);
-    const text = message.body.contentType === "html" ? previewText(message.body.content) : message.body.content;
-    drafts[draftKey] = `${message.from?.user?.displayName || "Teams"} wrote: “${text.slice(0, 2000)}”\n\n${drafts[draftKey] || ""}`;
+    quotes[draftKey] = message;
+    await tick();
+    messageEditor?.focus();
   }
+  async function focusMessage(id: string) {
+    highlighted = id;
+    await tick();
+    scrollWithinMessages(`[data-message-id="${CSS.escape(id)}"]`);
+  }
+  function scrollWithinMessages(selector: string, centered = true) {
+    const node = scroller?.querySelector<HTMLElement>(selector);
+    if (!scroller || !node) return;
+    scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (centered ? Math.max(0, (scroller.clientHeight - node.offsetHeight) / 2) : 12);
+  }
+  async function openFind() {
+    briefOpen = false;
+    findOpen = true;
+    await tick();
+    findInput?.focus(); findInput?.select();
+  }
+  async function navigateMatch(direction: number) {
+    if (!matches.length) return;
+    matchIndex = (matchIndex + direction + matches.length) % matches.length;
+    if (selectedMatch) await focusMessage(selectedMatch.id);
+  }
+  function connectKeys(e: KeyboardEvent) {
+    if (!connect.open || app.settingsOpen || app.paletteOpen || search.open || !(e.target as HTMLElement | null)?.closest("[data-connect]")) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && active && !browsing && !newMode) {
+      e.preventDefault(); e.stopPropagation(); void openFind();
+    }
+    if (e.key === "Escape" && findOpen) { e.preventDefault(); e.stopPropagation(); findOpen = false; messageQuery = ""; highlighted = null; messageEditor?.focus(); }
+  }
+  async function copyMessage(message: ConnectMessage) {
+    try { await navigator.clipboard.writeText(messageText(message)); toasts.show("Message copied", { kind: "success" }); }
+    catch { toasts.error("Could not copy. Select the message text to copy it manually."); }
+  }
+  async function appendDraft(text: string) {
+    if (quotedText(quoteMessage, draft + "\n\n" + text).length > MESSAGE_LIMIT) { toasts.show("There isn’t enough room in this draft. Shorten it before adding the brief."); return; }
+    drafts[draftKey] = draft.trim() ? `${draft}\n\n${text}` : text;
+    await tick(); messageEditor?.focus();
+  }
+  function dateLabel(value: string) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Unknown date";
+    const today = new Date(), yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+    if (dayKey(value) === dayKey(today.toISOString())) return "Today";
+    if (dayKey(value) === dayKey(yesterday.toISOString())) return "Yesterday";
+    return date.toLocaleDateString(app.settings?.ui.locale ?? "en-GB", { weekday: "short", month: "short", day: "numeric", ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" as const } : {}) });
+  }
+  function shortTime(value: string) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(app.settings?.ui.locale ?? "en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+  function rowPreview(row: ConnectChat) {
+    const saved = drafts[`${accountId}:${JSON.stringify({ kind: "chat", chatId: row.id })}`];
+    if (saved?.trim()) return saved;
+    const preview = row.lastMessagePreview;
+    const author = `ms-${preview?.from?.user?.id}` === accountId ? "You" : preview?.from?.user?.displayName?.split(" ")[0];
+    const text = previewText(preview?.body?.content || "");
+    return text ? `${author ? author + ": " : ""}${text}` : row.chatType === "meeting" ? "Meeting chat" : "Start a conversation";
+  }
+  $effect(() => {
+    void draft;
+    if (messageEditor) { messageEditor.style.height = "auto"; messageEditor.style.height = `${Math.min(200, messageEditor.scrollHeight)}px`; }
+  });
   async function loadMessages(silent = false, messageId?: string) {
     if (!active) return;
     const seq = ++messageSeq;
@@ -283,11 +383,12 @@
       if (entryCursor === null) entryCursor = readCursor(messages[messages.length - 1]?.createdDateTime);
       if (!silent) messageNext = page["@odata.nextLink"] ?? null;
       messageError = "";
-      if (!silent || nearBottom) {
+      refreshedAt = new Date().toISOString();
+      if ((!silent || nearBottom) && !findOpen) {
         await tick();
         if (seq === messageSeq && scroller) {
-          if (messageId) scroller.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center" });
-          else if (!silent && firstUnread) scroller.querySelector(".unread-divider")?.scrollIntoView({ block: "start" });
+          if (messageId) scrollWithinMessages(`[data-message-id="${CSS.escape(messageId)}"]`);
+          else if (!silent && firstUnread) scrollWithinMessages(".unread-divider", false);
           else scroller.scrollTop = scroller.scrollHeight;
         }
       }
@@ -319,17 +420,20 @@
     select({ title: "Thread", webUrl: message.webUrl || active.webUrl, resource: { kind: "replies", teamId, channelId, messageId: message.id } });
   }
   async function send() {
-    if (!active || !draft.trim() || sending) return;
+    if (!active || !draft.trim() || sending || outgoingLength > MESSAGE_LIMIT) return;
     const key = draftKey;
-    const text = draft;
+    const originalDraft = draft;
+    const originalQuote = quoteMessage;
+    const text = quotedText(originalQuote, originalDraft);
     const epoch = accountEpoch;
     sending = true;
     sendError = "";
     try {
       const sent = await connectApi.send(accountId, active.resource, text);
-      if (drafts[key] === text) drafts[key] = "";
+      if (drafts[key] === originalDraft && quotes[key] === originalQuote) { drafts[key] = ""; delete quotes[key]; }
       if (epoch === accountEpoch && key === draftKey) {
         messages = mergeMessages(messages, [sent]);
+        toasts.show("Message sent", { kind: "success", timeout: 2000 });
         await tick();
         if (key === draftKey && scroller) { scroller.scrollTop = scroller.scrollHeight; readVisible(); }
       }
@@ -361,7 +465,7 @@
   }
 </script>
 
-<svelte:document onvisibilitychange={readVisible} />
+<svelte:document onvisibilitychange={readVisible} onkeydowncapture={connectKeys} />
 <svelte:window onfocus={readVisible} />
 <section class="connect" data-connect aria-label="Connect workspace">
   <header class="heading">
@@ -401,38 +505,41 @@
           <button class:chosen={listing.kind === "chats"} onclick={() => loadList({ kind: "chats" })}><MessageCircle size={14} />Chats</button>
           <button class:chosen={listing.kind !== "chats"} onclick={() => loadList({ kind: "teams" })}><Hash size={14} />Channels</button>
           <button class="icon-btn" aria-label="New conversation" title="New conversation" onclick={() => startNew()}><Plus size={15} /></button>
-          <button class="icon-btn refresh" disabled={listLoading} aria-label="Refresh conversations" onclick={() => loadList(listing)}><RefreshCw size={13} class={listLoading ? "spin" : ""} /></button>
+          <button class="icon-btn refresh" disabled={listLoading} aria-label="Refresh conversations" onclick={() => loadList(listing, false, true)}><RefreshCw size={13} class={listLoading ? "spin" : ""} /></button>
         </div>
         {#if listing.kind === "channels"}<button class="group-back" onclick={() => loadList({ kind: "teams" })}><ArrowLeft size={13} />{groupTitle}</button>{/if}
-        <input class="filter" aria-label="Filter loaded conversations" placeholder="Find a conversation…" bind:value={filter} />
+        <div class="filter-wrap"><Search size={13} /><input class="filter" aria-label="Filter loaded conversations" placeholder="Find a chat, message, or draft…" bind:value={filter} />{#if filter}<button class="icon-btn" aria-label="Clear conversation filter" onclick={() => filter = ""}><X size={12} /></button>{/if}</div>
         {#if listing.kind === "chats"}
           <div class="read-filters" aria-label="Conversation read status">
-            <button class:chosen={!unreadOnly} aria-pressed={!unreadOnly} onclick={() => unreadOnly = false}>All</button>
-            <button class:chosen={unreadOnly} aria-pressed={unreadOnly} onclick={() => unreadOnly = true}>Unread{#if unreadCount}<span class="badge">{unreadCount}</span>{/if}</button>
+            <button class:chosen={readFilter === "all"} aria-pressed={readFilter === "all"} onclick={() => readFilter = "all"}>All</button>
+            <button class:chosen={readFilter === "unread"} aria-pressed={readFilter === "unread"} onclick={() => readFilter = "unread"}>Unread{#if unreadCount}<span class="badge">{unreadCount}</span>{/if}</button>
+            <button class:chosen={readFilter === "drafts"} aria-pressed={readFilter === "drafts"} onclick={() => readFilter = "drafts"}>Drafts{#if draftCount}<span class="badge">{draftCount}</span>{/if}</button>
           </div>
         {/if}
-        {#if listError}<p class="error" role="alert">{listError}</p>{/if}
+        {#if listError}<p class="error" role="alert">{listError} <button class="text-btn" onclick={() => loadList(listing, false, true)}>Try again</button></p>{/if}
         <div class="conversations">
           {#if pins.length}
             <div class="section-label">Pinned</div>
             {#each pins as pin (JSON.stringify(pin.conversation.resource))}
+              {@const pinnedChat = pinnedRow(pin.conversation)}
               <div class="conversation-row">
-                <button class="conversation pinned" class:selected={JSON.stringify(active?.resource) === JSON.stringify(pin.conversation.resource)} onclick={() => openPin(pin.conversation)}>
-                  <Pin size={13} /><span class="conversation-copy"><strong>{pin.conversation.title}</strong></span>
+                <button class="conversation pinned" class:unread={!!pinnedChat && rowUnread(pinnedChat)} class:selected={JSON.stringify(active?.resource) === JSON.stringify(pin.conversation.resource)} onclick={() => openPin(pin.conversation)}>
+                  <Pin size={13} /><span class="conversation-copy"><strong>{pinnedChat ? rowTitle(pinnedChat) : pin.conversation.title}</strong>{#if drafts[`${accountId}:${JSON.stringify(pin.conversation.resource)}`]?.trim()}<small class="draft-preview">Draft · {drafts[`${accountId}:${JSON.stringify(pin.conversation.resource)}`]}</small>{:else if pinnedChat}<small>{rowPreview(pinnedChat)}</small>{/if}</span>{#if pinnedChat && rowUnread(pinnedChat)}<span class="unread-dot" aria-label="Unread messages"></span>{/if}
                 </button>
                 <button class="pin-action icon-btn" aria-label={`Unpin ${pin.conversation.title}`} title="Unpin conversation" onclick={() => connect.togglePin(accountId, pin.conversation)}><PinOff size={12} /></button>
               </div>
             {/each}
-            <div class="section-label">{listing.kind === "chats" ? "Chats" : "Channels"}</div>
+            {#if visibleRows.length}<div class="section-label">{listing.kind === "chats" ? "Chats" : listing.kind === "teams" ? "Teams" : "Channels"}</div>{/if}
           {/if}
           {#each visibleRows as row (row.id)}
             {@const selected = active?.resource.kind === "chat" ? active.resource.chatId === row.id : active?.resource.kind === "channel" ? active.resource.channelId === row.id : false}
             <div class="conversation-row">
             <button class="conversation" class:selected class:unread={rowUnread(row)} aria-label={`${rowTitle(row)}${rowUnread(row) ? ", unread" : ""}`} onclick={() => choose(row)}>
-              <span class="conversation-icon">{#if "chatType" in row}<MessageCircle size={16} />{:else}<Hash size={16} />{/if}</span>
+              <span class="conversation-icon">{#if "chatType" in row}{rowTitle(row).split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase()}{:else}<Hash size={16} />{/if}</span>
               <span class="conversation-copy"><strong>{rowTitle(row)}{#if hasDraft(row)}<em>Draft</em>{/if}</strong>
-                {#if "chatType" in row}<small>{previewText(row.lastMessagePreview?.body?.content || "") || (row.chatType === "meeting" ? "Meeting chat" : "Open conversation")}</small>{/if}
+                {#if "chatType" in row}<small>{rowPreview(row)}</small>{/if}
               </span>
+              {#if "chatType" in row && row.lastMessagePreview?.createdDateTime}<time class="row-time" title={when(row.lastMessagePreview.createdDateTime)}>{dayKey(row.lastMessagePreview.createdDateTime) === dayKey(new Date().toISOString()) ? shortTime(row.lastMessagePreview.createdDateTime) : dateLabel(row.lastMessagePreview.createdDateTime)}</time>{/if}
               {#if rowUnread(row)}<span class="unread-dot" title="Unread messages" aria-label="Unread messages"></span>{/if}
             </button>
             {#if listing.kind !== "teams"}
@@ -440,11 +547,11 @@
               <button class="pin-action icon-btn" class:is-pinned={pinned} aria-label={`${pinned ? "Unpin" : "Pin"} ${rowTitle(row)}`} title={pinned ? "Unpin conversation" : "Pin conversation"} onclick={() => connect.togglePin(accountId, rowConversation(row))}>{#if pinned}<PinOff size={12} />{:else}<Pin size={12} />{/if}</button>
             {/if}
             </div>
-          {:else}<p class="empty">{listLoading ? "Loading conversations…" : filter ? "No matching conversations." : listError ? "Conversations couldn’t be loaded." : unreadOnly && listing.kind === "chats" ? "You’re caught up on loaded chats." : listing.kind === "teams" ? "No joined teams found." : "No conversations found."}</p>{/each}
+          {:else}{#if !pins.length}<p class="empty">{listLoading ? "Loading conversations…" : filter ? "No matching conversations." : listError ? "Conversations couldn’t be loaded." : readFilter === "unread" && listing.kind === "chats" ? "You’re caught up on loaded chats." : readFilter === "drafts" ? "No unfinished drafts in loaded chats." : listing.kind === "teams" ? "No joined teams found." : "No conversations found."}</p>{/if}{/each}
           {#if listNext}<button class="load-more" disabled={listLoading} onclick={() => loadList(listing, true)}>Load more conversations</button>{/if}
         </div>
       </div>
-      <div class="conversation-pane">
+      <div class="conversation-pane" class:brief-open={briefOpen}>
         {#if active}
           <div class="conversation-heading">
             {#if !parent}<button class="icon-btn conversation-switch" aria-label="Back to conversations" title="Back to conversations" onclick={() => browsing = true}><ArrowLeft size={16} /></button>{/if}
@@ -455,19 +562,29 @@
             <button class="icon-btn" title="Open in Teams for calls, files, and more" aria-label="Open conversation in Teams" onclick={() => external()}><ExternalLink size={14} /></button>
           </div>
           <div class="bridges">
+            <button title="Find in loaded messages (Ctrl+F)" onclick={openFind}><Search size={12} /> Find</button>
+            {#if active.resource.kind === "chat"}<button aria-expanded={peopleOpen} onclick={() => peopleOpen = !peopleOpen}><Users size={12} /> People</button>{/if}
             <button title={composer.open ? "Finish your current email draft first" : "Draft an email from this conversation"} disabled={composer.open} onclick={emailConversation}><Mail size={12} /> Email</button>
             <button onclick={() => planMeeting()}><CalendarPlus size={12} /> Plan meeting</button>
             <button onclick={() => { search.accountId = accountId; search.tab = "all"; void search.run(active?.title || ""); }}><Search size={12} /> Related</button>
           </div>
-          {#if messageError}<p class="error" role="alert">{messageError}</p>{/if}
+          {#if peopleOpen}
+            <div class="participants" aria-label="Conversation participants"><strong>{active.members?.length || 0} participants</strong>{#each active.members ?? [] as member (member.userId)}<div><span>{member.displayName}{`ms-${member.userId}` === accountId ? " (you)" : ""}</span><small>{member.email || ""}</small></div>{:else}<p>Participant details are unavailable.</p>{/each}</div>
+          {/if}
+          {#key draftKey}<ConversationBrief bind:visible={briefOpen} {account} conversation={active} messages={rootMessage ? [rootMessage, ...messages] : messages} onSource={(id) => { if (id === rootMessage?.id) scrollWithinMessages(".thread-root", false); else void focusMessage(id); }} onDraft={appendDraft} onPlan={planMeeting} />{/key}
+          {#if findOpen}
+            <div class="message-find"><Search size={13} /><input bind:this={findInput} aria-label="Find in loaded messages" placeholder="Find text or a person…" value={messageQuery} oninput={(e) => { messageQuery = e.currentTarget.value; matchIndex = 0; if (selectedMatch) void focusMessage(selectedMatch.id); }} onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void navigateMatch(e.shiftKey ? -1 : 1); } }} /><span role="status">{messageQuery.trim() ? matches.length ? `${matchIndex % matches.length + 1} / ${matches.length}` : "No matches" : "Loaded messages"}</span><button class="icon-btn" disabled={!matches.length} aria-label="Previous match" onclick={() => navigateMatch(-1)}><ChevronUp size={13} /></button><button class="icon-btn" disabled={!matches.length} aria-label="Next match" onclick={() => navigateMatch(1)}><ChevronDown size={13} /></button><button class="icon-btn" aria-label="Close message search" onclick={() => { findOpen = false; messageQuery = ""; highlighted = null; }}><X size={13} /></button></div>
+          {/if}
+          {#if messageError}<p class="error" role="alert">{messageError} <button class="text-btn" disabled={messageLoading} onclick={() => loadMessages(true)}>Try again</button></p>{/if}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
           <div class="messages" bind:this={scroller} onclick={bodyLink} onscroll={readVisible}>
             {#if rootMessage}<div class="thread-root"><strong>{rootMessage.from?.user?.displayName || "Channel post"}</strong><p>{previewText(rootMessage.body.content)}</p></div>{/if}
             {#if messageNext}<button class="load-more" disabled={olderLoading || messageLoading} onclick={older}>{olderLoading ? "Loading…" : "Load more messages"}</button>{/if}
-            {#each messages as message (message.id)}
+            {#each messages as message, i (message.id)}
+              {#if i === 0 || dayKey(message.createdDateTime) !== dayKey(messages[i - 1].createdDateTime)}<div class="day-divider"><span>{dateLabel(message.createdDateTime)}</span></div>{/if}
               {#if message.id === firstUnread?.id}<div class="unread-divider" role="separator" aria-label="New messages"><span>New messages</span></div>{/if}
-              <article class="message" data-message-id={message.id} class:highlighted={message.id === highlighted} class:mine={`ms-${message.from?.user?.id}` === accountId}>
-                <div class="message-meta"><strong>{message.from?.user?.displayName || message.from?.application?.displayName || "Teams"}</strong><time datetime={message.createdDateTime}>{when(message.createdDateTime)}</time></div>
+              <article class="message" data-message-id={message.id} class:highlighted={message.id === highlighted} class:search-match={findOpen && !!messageQuery.trim() && matchesMessage(message, messageQuery)} class:mine={`ms-${message.from?.user?.id}` === accountId}>
+                <div class="message-meta"><strong>{message.from?.user?.displayName || message.from?.application?.displayName || "Teams"}</strong><time datetime={message.createdDateTime} title={when(message.createdDateTime)}>{shortTime(message.createdDateTime)}</time></div>
                 {#if message.deletedDateTime}<p class="deleted">Message deleted</p>
                 {:else}
                   {#if message.subject}<strong>{message.subject}</strong>{/if}
@@ -475,21 +592,24 @@
                   {:else}<div class="message-body plain">{message.body.content || "Activity in Teams"}</div>{/if}
                   {#if message.lastEditedDateTime}<small class="edited">Edited</small>{/if}
                   {#if message.attachments?.length}<button class="text-btn" onclick={() => external(message.webUrl || active?.webUrl)}>Open {message.attachments.length} attachment(s) in Teams <ExternalLink size={11} /></button>{/if}
-                  <button class="text-btn" onclick={() => quote(message)}>Quote in reply</button>
-                  {#if active.resource.kind === "channel"}<button class="text-btn" onclick={() => replies(message)}>View thread / reply</button>{/if}
+                  <div class="message-actions"><button class="text-btn" onclick={() => quote(message)}><Quote size={12} />Reply</button><button class="text-btn" onclick={() => copyMessage(message)}><Copy size={12} />Copy</button>
+                  {#if active.resource.kind === "channel"}<button class="text-btn" onclick={() => replies(message)}>View thread / reply</button>{/if}</div>
                 {/if}
               </article>
             {:else}<p class="empty">{messageLoading ? "Loading messages…" : messageError ? "Messages couldn’t be loaded." : "No messages yet. Start the conversation below."}</p>{/each}
           </div>
-          {#if pending.length && !messageLoading}<button class="new-messages" type="button" onclick={jumpToLatest}>{pending.length} new {pending.length === 1 ? "message" : "messages"} · Jump to latest ↓</button>{/if}
+          {#if (!nearLatest || pending.length > 0) && !messageLoading}<button class="new-messages" type="button" onclick={jumpToLatest}>{#if pending.length}{pending.length} new {pending.length === 1 ? "message" : "messages"} · {/if}Jump to latest <ArrowDown size={12} /></button>{/if}
           <form class="compose" onsubmit={(e) => { e.preventDefault(); void send(); }}>
             {#key draftKey}
-              <ConnectAssistant {account} conversation={active} messages={rootMessage ? [rootMessage, ...messages] : messages} {draft} onUse={(text) => drafts[draftKey] = text} onPlan={planMeeting} />
+              <ConnectAssistant {account} conversation={active} messages={rootMessage ? [rootMessage, ...messages] : messages} {draft} onUse={(text) => drafts[draftKey] = text} />
             {/key}
             {#if sendError}<p class="error" role="alert">{sendError}</p>{/if}
-            <textarea bind:this={messageEditor} aria-label="Message" placeholder={active.resource.kind === "channel" ? "Start a new channel post…" : "Write a message…"} value={draft} oninput={(e) => drafts[draftKey] = e.currentTarget.value} rows="3" maxlength="20000"
-              onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void send(); } }}></textarea>
-            <div class="compose-footer"><EmojiPicker onSelect={addEmoji} /><span>Ctrl + Enter to send</span><button class="btn primary" disabled={!draft.trim() || sending} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
+            {#if quoteMessage}<div class="quote-preview"><Quote size={14} /><div><strong>Replying to {quoteMessage.from?.user?.displayName || "Teams"}</strong><p>{messageText(quoteMessage).slice(0, 2000)}</p></div><button type="button" class="icon-btn" aria-label="Remove quoted message" onclick={() => delete quotes[draftKey]}><X size={14} /></button></div>{/if}
+            <textarea bind:this={messageEditor} aria-label="Message" placeholder={active.resource.kind === "channel" ? "Start a new channel post…" : "Write a message…"} value={draft} oninput={(e) => drafts[draftKey] = e.currentTarget.value} rows="3" maxlength={MESSAGE_LIMIT}
+              onkeydown={(e) => { if (!e.isComposing && (e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void send(); } }}></textarea>
+            {#if outgoingLength > MESSAGE_LIMIT}<p class="error" role="alert">Shorten your message or remove the quote to send.</p>{/if}
+            <div class="compose-footer"><EmojiPicker onSelect={addEmoji} /><span>Ctrl + Enter to send</span>{#if outgoingLength > MESSAGE_LIMIT - 2000}<span class:over-limit={outgoingLength > MESSAGE_LIMIT} role="status">{outgoingLength.toLocaleString()} / 20,000</span>{/if}<button class="btn primary" disabled={!draft.trim() || sending || outgoingLength > MESSAGE_LIMIT} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
+            {#if refreshedAt}<div class="sync-status"><Check size={10} /> Updated {shortTime(refreshedAt)} · Refreshes every 15 seconds while visible</div>{/if}
           </form>
         {:else}<div class="empty-state"><MessageCircle size={32} /><h3>Keep the conversation close</h3><p>Choose a chat or channel. Your mail and calendar stay right beside it.</p><button class="btn primary" onclick={() => startNew()}><Plus size={13} /> New conversation</button></div>{/if}
       </div>
@@ -498,12 +618,12 @@
 </section>
 
 <style>
-  .connect { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); container-type: inline-size; }
-  .heading { display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); color: var(--accent); }
+  .connect { overflow: hidden; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); container-type: inline-size; }
+  .heading { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); color: var(--accent); }
   .brand { flex: 1; display: flex; flex-direction: column; gap: 3px; }
   .brand strong { color: var(--fg-bright); font-size: 16px; }
   .brand span, small { font-size: 11px; color: var(--muted); }
-  .account-row { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .account-row { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
   select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); padding: 6px; font-size: 12px; }
   .welcome { margin: auto; max-width: 400px; padding: 28px; text-align: center; }
   .welcome-icon { display: inline-flex; padding: 18px; border-radius: 20px; color: var(--accent); background: var(--accent-soft); }
@@ -517,7 +637,8 @@
   .tabs > button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 6px; color: var(--muted); font-size: 12px; }
   .tabs > button.chosen { color: var(--accent); background: var(--accent-soft); }
   .tabs .refresh { margin-left: auto; }
-  .filter { flex: none; margin: 0 14px 8px; padding: 7px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; color: var(--fg); font-size: 12px; }
+  .filter-wrap { display: flex; align-items: center; gap: 6px; margin: 0 14px 8px; color: var(--muted); }
+  .filter { flex: 1; width: 0; padding: 7px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; color: var(--fg); font-size: 12px; }
   .conversations { overflow-y: auto; min-height: 0; padding: 0 8px 8px; }
   .section-label { padding: 10px 9px 5px; font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
   .conversation-row { display: flex; align-items: center; position: relative; }
@@ -529,7 +650,7 @@
   .conversation { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; border-radius: 7px; }
   .conversation:hover { background: var(--panel); }
   .conversation.selected { background: var(--accent-soft); }
-  .conversation-icon { color: var(--muted); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--panel); flex: none; }
+  .conversation-icon { font-size: 10px; font-weight: 650; color: var(--muted); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--panel); flex: none; }
   .conversation-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; flex: 1; }
   .conversation.unread .conversation-copy strong { color: var(--fg-bright); font-weight: 700; }
   .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
@@ -539,18 +660,19 @@
   .badge { font-size: 10px; font-weight: 600; }
   .unread-divider { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 10px; margin: 0 0 16px; scroll-margin-top: 12px; }
   .unread-divider::before, .unread-divider::after { content: ""; height: 1px; flex: 1; background: var(--accent-line); }
-  .new-messages { align-self: center; margin: 0 12px 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+  .new-messages { display: inline-flex; align-items: center; gap: 5px; align-self: center; margin: 0 12px 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
   .conversation-copy strong { font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conversation-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-back { display: flex; align-items: center; gap: 6px; padding: 0 16px 9px; font-size: 12px; color: var(--muted); }
-  .conversation-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .conversation-pane { overflow: hidden; flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .conversation-pane.brief-open > :is(.bridges, .participants, .message-find, .messages, .new-messages, .compose) { display: none; }
   .conversation-switch { display: none; }
-  .bridges { display: flex; gap: 12px; padding: 5px 14px 9px; border-bottom: 1px solid var(--line); }
+  .bridges { display: flex; flex-wrap: wrap; gap: 12px; padding: 5px 14px 9px; border-bottom: 1px solid var(--line); }
   .bridges button { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--accent); }
   .conversation-heading { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   .conversation-heading > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .conversation-heading strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; overflow-wrap: anywhere; user-select: text; }
+  .messages { flex: 1; min-height: 80px; overflow-y: auto; padding: 16px; overflow-wrap: anywhere; user-select: text; }
   .message { margin: 0 0 18px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
   .message.highlighted { outline: 2px solid var(--accent); outline-offset: 3px; }
   .message.mine { border-color: var(--accent-line); background: var(--accent-soft); }
@@ -565,20 +687,39 @@
   .message-body :global(blockquote) { border-left: 2px solid var(--accent-line); padding-left: 10px; margin-left: 0; }
   .deleted, .edited { color: var(--muted); font-size: 11px; }
   .thread-root { padding: 12px; border-left: 2px solid var(--accent); background: var(--panel); margin-bottom: 16px; font-size: 12px; }
-  .compose { flex: none; max-height: 58%; overflow-y: auto; border-top: 1px solid var(--line); padding: 12px; }
-  textarea { width: 100%; resize: vertical; max-height: 200px; min-height: 64px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--fg); font-family: inherit; font-size: 13px; }
+  .compose { display: flex; flex-direction: column; gap: 0; flex: 0 1 auto; min-height: 120px; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); padding: 12px; }
+  textarea { flex: 1 1 auto; width: 100%; resize: none; max-height: 200px; min-height: 64px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--fg); font-family: inherit; font-size: 13px; }
   textarea:focus { outline: 1px solid var(--accent); }
-  .compose-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+  .compose-footer { flex: none; display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
   .compose-footer span { font-size: 10px; color: var(--muted); }
   .compose-footer .primary { margin-left: auto; }
   .text-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 11px; padding: 6px 0; }
-  .message .text-btn { display: flex; margin-top: 4px; }
+  .message-actions { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
   .load-more { display: block; color: var(--accent); font-size: 11px; padding: 10px; margin: auto; }
   .empty { padding: 12px; color: var(--muted); font-size: 12px; text-align: center; }
   .empty-state { margin: auto; text-align: center; max-width: 280px; padding: 25px; color: var(--muted); }
   .empty-state h3 { font-size: 15px; color: var(--fg); }
   .error { padding: 10px 14px; margin: 0; font-size: 12px; color: var(--red); line-height: 1.5; overflow-wrap: anywhere; }
   button:disabled { opacity: .5; cursor: default; }
+  .row-time { flex: none; max-width: 65px; text-align: right; font-size: 9px; }
+  .day-divider { display: flex; align-items: center; gap: 12px; margin: 5px 0 18px; color: var(--muted); font-size: 10px; }
+  .day-divider::before, .day-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+  .message.search-match { border-color: var(--accent); }
+  .message-find { display: flex; align-items: center; gap: 5px; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); }
+  .message-find input { width: 0; min-width: 40px; flex: 1; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 7px; font-size: 12px; }
+  .message-find span { font-size: 9px; white-space: nowrap; }
+  .message-find .icon-btn { width: 24px; flex: none; }
+  .participants { padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); max-height: 180px; overflow-y: auto; font-size: 11px; }
+  .participants > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; padding-top: 9px; }
+  .quote-preview { display: flex; align-items: flex-start; gap: 8px; padding: 10px; margin-bottom: 8px; background: var(--accent-soft); border-left: 2px solid var(--accent); border-radius: 6px; color: var(--accent); }
+  .quote-preview > div { flex: 1; min-width: 0; }
+  .quote-preview strong { font-size: 11px; }
+  .quote-preview p { color: var(--muted); font-size: 11px; margin: 5px 0 0; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .compose-footer .over-limit { color: var(--red); }
+  .sync-status { flex: none; display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; margin-top: 8px; }
+  .draft-preview { color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (hover: none) { .pin-action { opacity: 1; } }
   @container (min-width: 700px) {
     .workspace { flex-direction: row; }
     .browser, .workspace:not(.has-conversation) .browser { width: 260px; flex: none; max-height: none; border-right: 1px solid var(--line); border-bottom: 0; }

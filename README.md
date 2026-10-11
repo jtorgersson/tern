@@ -9,6 +9,19 @@ Mail, calendar, and conversations in one focused workspace for Omarchy. Built wi
 - **Room to read:** docked Connect gives the selected conversation the full panel, with Back to conversations for switching. Expanded Connect keeps its list beside the conversation. Small windows show the message list or the open email, with Back to messages; wider windows keep both visible.
 - **Clearer controls:** a labeled New email action, Workspace / Mail / Focus navigation, restrained row styling, visible selection controls, and explicit loading, empty, and retry states. Reduced-motion preferences are respected.
 
+### Ten for mail — 0.3.0
+
+- **Who is this?** Click any name in the reader and a person card slides in: how much you've exchanged and since when, what they're still waiting on from you, what you're waiting on from them, your upcoming meetings together, their latest mail — all from what's already on your machine. One click to email them, find a time, chat in Connect, see all their mail, or archive everything from them. **Brief me** asks Tern for a short, sourced summary of where things stand.
+- **Attachments:** attach files from the composer (paperclip), drop them onto it, or paste a screenshot. Large files upload in chunks. If you write "attached" and forget the file, Tern asks before sending.
+- **Attachments open in place:** click an attachment to open it with its default app; images show thumbnails; the save icon still puts it in Downloads.
+- **Just the new words:** quoted earlier messages fold behind *Show quoted text*, so a reply reads as a reply.
+- **Move to folder (`v`):** a fuzzy picker over your folders, from the list, the reader, or a selection. Undo from the toast.
+- **Search operators:** `from:anna`, `to:`, `subject:`, `has:attachment`, `is:unread`, `is:flagged`, `in:sent`, `before:2026-10-01`, `after:7d` — alone or with words, in the search box and the agent.
+- **Drafts never disappear:** the composer autosaves locally while you type, restores an unsent draft after a restart, and closing a draft gives you a few seconds to undo.
+- **Send & archive** (`Ctrl+Shift+Enter`) replies and clears the original from the inbox in one move.
+- **Where does that link go?** Hover a link in an email and its real destination shows in the corner; a link whose text names one site but points at another is flagged.
+- **Text size:** `Ctrl +` / `Ctrl -` / `Ctrl 0` in the reader.
+
 - **Microsoft 365 / Outlook.com** via Microsoft Graph. Multiple accounts and a unified inbox are supported, and delta sync runs every 60s.
 - **Connect:** Microsoft Teams chats and channels beside your mail or calendar (`g b`). Read and send messages, browse channel threads, and reply without switching apps. Resize the dock or expand it; conversation drafts survive navigation and closing the dock during the session. Create chats with new people or groups, draft replies with AI, catch up on a thread, and turn conversations into email or meeting drafts. Calls and attachments open in Teams. Work or school accounts only; enable access per account.
 - **One search across your day:** the top search field (`/`) returns mail, calendar events, and Connect messages together, with source tabs and account filtering. Connect results search Microsoft’s index, including conversations you haven’t opened in Tern.
@@ -61,13 +74,17 @@ Then choose your work or school account in Connect and click **Enable Connect**.
 
 Chats and channels use your existing Teams conversations. The selected conversation refreshes every 15 seconds while Connect is open and Tern is visible; the conversation list refreshes every minute. Use **Load more** for earlier messages and additional conversations. **Ctrl+Enter** sends; Enter adds a line. Failed sends retain the draft and are not automatically retried, since delivery can be uncertain.
 
+Connect’s conversation filter matches names, loaded message previews, and draft text. **All**, **Unread**, and **Drafts** keep the list focused, and pinned conversations appear once. Sender previews, initials, and timestamps make recent chats easier to recognize. Refresh preserves the current filter and loaded conversations; errors offer **Try again**.
+
+Messages are grouped by day. Use **Find** (`Ctrl+F` while focused in Connect) to search loaded messages by text or author; Enter / Shift+Enter move between matches and Escape closes search. **People** shows chat participants, **Copy** copies a message, and **Jump to latest** returns from older messages. The composer grows with your draft, shows a counter near the 20,000-character limit (including quoted text), and keeps drafts and removable quotes separate for each account and conversation. Quotes are included as text when sent. Sending remains explicit.
+
 Use **+ New conversation** to find people in your organization by name or email. Select one person to open/reuse their direct chat, or several to create a named group. The new permissions are `Chat.Create` and `User.ReadBasic.All`; existing Connect users see **Enable new conversations** before using the picker. The upgrade keeps existing read/send consent intact until you approve the new permissions. Directory availability and guest/external access depend on Microsoft tenant policy.
 
 The smile button in mail and chat opens a searchable emoji picker. Emoji are inserted at the cursor, replacing selected text; arrow keys navigate the picker, Enter selects, and Escape closes it.
 
-**Writing assistant** uses your configured AI provider to stream reply suggestions. Add an instruction, choose **Shorter**, **Warmer**, or **Ask a question**, then review and use the suggestion. Existing drafts are replaced only when you click **Replace draft**. **Catch me up** summarizes loaded messages, decisions, and next steps; you can turn the brief into a meeting draft. The context is limited to the most recent 40 loaded, non-deleted messages (up to 18,000 characters), not the entire unseen history. The open email is included only if you check its checkbox. AI never sends messages or books meetings.
+**Writing assistant** uses your configured AI provider to stream reply suggestions. Add an instruction, choose **Shorter**, **Warmer**, or **Ask a question**, then review and use the suggestion. Existing drafts are replaced only when you click **Replace draft**. **Conversation brief** turns the conversation into a short overview and cards for decisions, next steps, and open questions. Each card links back to its source messages. Add the brief to your existing draft or plan a follow-up meeting; refresh it when the conversation changes. The context is limited to the most recent 40 loaded, non-deleted messages (up to 18,000 characters), not the entire unseen history. The writing assistant includes the open email only if you check its checkbox. Conversation briefs use conversation messages only. AI never sends messages or books meetings.
 
-**Discuss in Connect** in the mail reader opens the person picker with the sender (or recipient for your sent mail) and an editable excerpt of the email. **Email** in a conversation prepares an email addressed to the known chat participants; **Plan meeting** prepares an online calendar event. These handoffs use the same Microsoft account and leave the result for you to review. Existing email/event drafts are preserved. **Quote in reply** brings the selected message into the composer; in channels it opens the message’s thread.
+**Discuss in Connect** in the mail reader opens the person picker with the sender (or recipient for your sent mail) and an editable excerpt of the email. **Email** in a conversation prepares an email addressed to the known chat participants; **Plan meeting** prepares an online calendar event. These handoffs use the same Microsoft account and leave the result for you to review. Existing email/event drafts are preserved. **Reply** attaches a removable quote card above the composer; in channels it opens the message’s thread.
 
 The main search field searches all three sources on Enter. Tabs narrow the displayed results; the account selector limits the search. Mail and calendar searches cover locally downloaded data (calendar shows up to 200 closest matches); Connect searches Microsoft’s live index in every enabled account, with pagination and independent errors/retry per account. Recent messages may take time to appear in Microsoft’s index. Selecting a result opens its email, calendar event, or exact Connect message. **Related** searches across all three sources using the current conversation title.
 
@@ -100,6 +117,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `j` / `k` | next / previous |
 | `Enter` / `o` | open |
 | `e` | archive |
+| `v` | move to folder |
 | `#` | delete |
 | `s` | flag |
 | `u` | toggle read |
@@ -107,6 +125,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `Ctrl+A` | select / clear all loaded messages |
 | `Shift+click` | select a range of messages |
 | `r` / `Shift+R` / `f` | reply / reply all / forward |
+| `Ctrl+Enter` / `Ctrl+Shift+Enter` | send / send & archive |
 | `c` | compose |
 | `/` | search mail, calendar, and Connect |
 | `g t` / `g c` / `g i` / `g s` / `g d` / `g x` | today / calendar / inbox / sent / drafts / trash |
@@ -117,6 +136,7 @@ On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABU
 | `z`, `g z` | snooze, snoozed mail |
 | `g b` | open / close Connect beside mail and calendar |
 | `g j` | join the current / next meeting |
+| `Ctrl +` / `Ctrl -` / `Ctrl 0` | reader text size |
 | `Ctrl+K` | command palette |
 | `Ctrl+J` | agent |
 | `?` | all shortcuts |

@@ -179,6 +179,39 @@ pub struct OutgoingMessage {
     /// Deliver later: UTC ISO ("…Z"). Exchange holds the message in the Outbox until then (works with Tern closed).
     #[serde(default)]
     pub send_at: Option<String>,
+    /// Files to attach (base64 bytes). Small ones go inline; larger ones use a Graph upload session.
+    #[serde(default)]
+    pub attachments: Vec<OutgoingAttachment>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingAttachment {
+    pub name: String,
+    pub content_type: String,
+    /// Base64 (standard alphabet, no data: prefix).
+    pub data: String,
+}
+
+/// What Tern knows locally about one correspondent (the person card).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonSummary {
+    pub email: String,
+    /// Best display name seen in mail headers ("" when unknown).
+    pub name: String,
+    /// Messages from them (any mailbox except junk / trash / drafts).
+    pub received: i64,
+    /// Messages the user sent to them (To or Cc).
+    pub sent: i64,
+    pub first_at: Option<String>,
+    pub last_at: Option<String>,
+    /// Latest mail from them, newest first.
+    pub recent: Vec<MessageSummary>,
+    /// Mail the user sent them that they have not answered yet, newest first.
+    pub waiting: Vec<MessageSummary>,
+    /// Mail from them in the inbox the user has not replied to, newest first.
+    pub unanswered: Vec<MessageSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]

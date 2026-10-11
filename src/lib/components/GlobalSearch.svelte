@@ -66,6 +66,7 @@
           {#if search.mailError}<p class="error" role="alert">{search.mailError} <button onclick={() => search.run(search.query)}>Retry search</button></p>{/if}
           {#each search.mail as m (m.id)}<button class="result" disabled={opening} onclick={() => mail(m)}><div class="result-top"><strong>{m.subject || "(no subject)"}</strong><time>{date(m.receivedAt)}</time></div><span>{m.from.name || m.from.email} · {app.accountById.get(m.accountId)?.email}</span><p>{m.preview}</p></button>
           {:else}<p class="empty">{search.mailLoading ? "Searching mail…" : search.mailError ? "Mail search unavailable." : "No matching mail."}</p>{/each}
+          {#if !search.mailLoading && !/\b(from|to|subject|has|is|in|before|after|newer|older):/i.test(search.query)}<p class="empty tip">Narrow mail with <kbd>from:anna</kbd> <kbd>to:me@…</kbd> <kbd>subject:…</kbd> <kbd>has:attachment</kbd> <kbd>is:unread</kbd> <kbd>is:flagged</kbd> <kbd>in:sent</kbd> <kbd>after:7d</kbd> <kbd>before:2026-10-01</kbd></p>{/if}
           {#if search.mailMore}<button class="btn more" disabled={search.mailLoading} onclick={() => search.moreMail()}>More mail</button>{/if}
         </section>
       {/if}
@@ -116,6 +117,8 @@
   .result span { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 11px; color: var(--muted); }
   .result p { font-size: 12px; line-height: 1.5; margin: 7px 0 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
   .empty, .hint { color: var(--muted); font-size: 12px; padding: 8px 0; }
+  .tip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .tip kbd { font-size: 10px; }
   .hint { font-size: 11px; }
   .error { color: var(--red); font-size: 12px; padding: 8px 20px; }
   .error button { text-decoration: underline; }

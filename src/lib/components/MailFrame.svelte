@@ -4,7 +4,13 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ImageOff } from "@lucide/svelte";
 
-  let { html }: { html: string } = $props();
+  export interface HoverLink {
+    href: string;
+    /** Visible link text (for spotting links that say one site and go to another). */
+    text: string;
+  }
+
+  let { html, onlink }: { html: string; onlink?: (link: HoverLink | null) => void } = $props();
 
   let frame: HTMLIFrameElement | undefined = $state();
   let height = $state(120);
@@ -23,6 +29,7 @@
       fg: cs.getPropertyValue("--fg").trim() || "#ddd",
       link: cs.getPropertyValue("--accent").trim() || "#7aa2f7",
       font: `"Adwaita Sans", "Inter", system-ui, sans-serif`,
+      scale: app.readerScale,
     });
   });
 
@@ -41,15 +48,37 @@
     ro.observe(doc.documentElement);
     doc.querySelectorAll("img").forEach((img) => img.addEventListener("load", measure, { once: true }));
     doc.addEventListener("click", (e) => {
-      const a = (e.target as HTMLElement).closest?.("a");
+      const target = e.target as HTMLElement;
+      const toggle = target.closest?.(".tern-quote-toggle");
+      if (toggle) {
+        e.preventDefault();
+        const quote = toggle.nextElementSibling as HTMLElement | null;
+        if (quote) {
+          quote.hidden = !quote.hidden;
+          toggle.textContent = quote.hidden ? "··· Show quoted text" : "Hide quoted text";
+          requestAnimationFrame(measure);
+        }
+        return;
+      }
+      const a = target.closest?.("a");
       if (!a) return;
       e.preventDefault();
       const href = a.getAttribute("href") ?? "";
       if (/^(https?|mailto|tel):/i.test(href)) openUrl(href).catch(() => {});
     });
+    // Link destinations show in the reader while hovering (the iframe can't show a status bar of its own).
+    doc.addEventListener("mouseover", (e) => {
+      const a = (e.target as HTMLElement).closest?.("a[href]") as HTMLAnchorElement | null;
+      const href = a?.getAttribute("href") ?? "";
+      onlink?.(a && /^(https?|mailto|tel):/i.test(href) ? { href, text: (a.textContent ?? "").trim() } : null);
+    });
+    doc.documentElement.addEventListener("mouseleave", () => onlink?.(null));
   }
 
-  $effect(() => () => ro?.disconnect());
+  $effect(() => () => {
+    ro?.disconnect();
+    onlink?.(null);
+  });
 </script>
 
 {#if rendered.blockedImages > 0 && !allowRemote && policy !== "never"}

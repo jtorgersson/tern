@@ -542,6 +542,70 @@ pub async fn attachment_save(st: St<'_>, message_id: String, attachment_id: Stri
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn clean_file_name(name: &str) -> String {
+    let clean: String = name.chars().map(|c| if c == '/' || c == '\\' || c == '\0' { '_' } else { c }).collect();
+    let clean = clean.trim_start_matches('.').trim().to_string();
+    if clean.is_empty() { "attachment".to_string() } else { clean }
+}
+
+/// Downloads the attachment once into ~/.cache/tern/attachments/<message hash>/<name> and returns the path.
+async fn cached_attachment(st: &AppState, message_id: &str, attachment_id: &str) -> R<(std::path::PathBuf, Attachment)> {
+    use sha2::Digest;
+    let acc = account_of(st, message_id)?;
+    let body = st.db.body(message_id).map_err(err)?;
+    let att = body
+        .and_then(|b| b.attachments.into_iter().find(|a| a.id == attachment_id))
+        .ok_or("Attachment not found")?;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(message_id.as_bytes());
+    hasher.update(attachment_id.as_bytes());
+    let key = format!("{:x}", hasher.finalize());
+    let dir = dirs::cache_dir().or_else(dirs::home_dir).ok_or("no cache directory")?.join("tern").join("attachments").join(&key[..16]);
+    let path = dir.join(clean_file_name(&att.name));
+    if tokio::fs::metadata(&path).await.map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok((path, att));
+    }
+    let bytes = graph::attachment_bytes(st, &acc, message_id, attachment_id).await.map_err(|e| format!("{e:#}"))?;
+    tokio::fs::create_dir_all(&dir).await.map_err(err)?;
+    tokio::fs::write(&path, bytes).await.map_err(err)?;
+    Ok((path, att))
+}
+
+/// Path of a locally cached copy, for opening with the system's default app.
+#[tauri::command]
+pub async fn attachment_open(st: St<'_>, message_id: String, attachment_id: String) -> R<String> {
+    let (path, _) = cached_attachment(&st, &message_id, &attachment_id).await?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// `data:` URL for an image attachment (thumbnails in the reader). Null for anything else or too large.
+#[tauri::command]
+pub async fn attachment_preview(st: St<'_>, message_id: String, attachment_id: String) -> R<Option<String>> {
+    use base64::Engine;
+    const MAX: u64 = 6 * 1024 * 1024;
+    let body = st.db.body(&message_id).map_err(err)?;
+    let Some(att) = body.and_then(|b| b.attachments.into_iter().find(|a| a.id == attachment_id)) else { return Ok(None) };
+    let image = att.content_type.starts_with("image/") && !att.content_type.contains("svg");
+    if !image || att.size as u64 > MAX {
+        return Ok(None);
+    }
+    let (path, _) = cached_attachment(&st, &message_id, &attachment_id).await?;
+    let bytes = tokio::fs::read(&path).await.map_err(err)?;
+    if bytes.len() as u64 > MAX {
+        return Ok(None);
+    }
+    Ok(Some(format!("data:{};base64,{}", att.content_type, base64::engine::general_purpose::STANDARD.encode(bytes))))
+}
+
+/// Local relationship summary for the person card.
+#[tauri::command]
+pub fn person_summary(st: St, email: String, limit: Option<i64>) -> R<PersonSummary> {
+    if !valid_mailbox(&email) {
+        return Err("Not an email address".into());
+    }
+    st.db.person(&email, limit.unwrap_or(8)).map_err(err)
+}
+
 #[tauri::command]
 pub fn sync_now(st: St, account_id: Option<String>) {
     let _ = account_id; // the loop syncs every account; cheap when nothing changed

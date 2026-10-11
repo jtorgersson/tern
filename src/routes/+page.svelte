@@ -19,6 +19,8 @@
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import Cheatsheet from "$lib/components/Cheatsheet.svelte";
   import SnoozePicker from "$lib/components/SnoozePicker.svelte";
+  import FolderPicker from "$lib/components/FolderPicker.svelte";
+  import PersonCard from "$lib/components/PersonCard.svelte";
   import Onboarding from "$lib/components/Onboarding.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import Logo from "$lib/components/Logo.svelte";
@@ -136,6 +138,8 @@
   <CommandPalette />
   <Cheatsheet />
   <SnoozePicker />
+  <FolderPicker />
+  <PersonCard />
 {/if}
 
 {#if app.ready}

@@ -22,6 +22,7 @@ import type {
   MessageQuery,
   MessageSummary,
   OutgoingMessage,
+  PersonSummary,
   Settings,
   Theme,
 } from "./types";
@@ -68,6 +69,14 @@ export const api = {
   /** Saves to ~/Downloads and returns the path. */
   saveAttachment: (messageId: string, attachmentId: string) =>
     invoke<string>("attachment_save", { messageId, attachmentId }),
+  /** Caches the attachment under ~/.cache/tern and returns the path (for opening with the default app). */
+  attachmentOpen: (messageId: string, attachmentId: string) =>
+    invoke<string>("attachment_open", { messageId, attachmentId }),
+  /** data: URL for an image attachment (null for other types or large images). */
+  attachmentPreview: (messageId: string, attachmentId: string) =>
+    invoke<string | null>("attachment_preview", { messageId, attachmentId }),
+  /** Local relationship summary for one email address (person card). */
+  person: (email: string, limit = 8) => invoke<PersonSummary>("person_summary", { email, limit }),
 
   syncNow: (accountId?: string | null) => invoke<void>("sync_now", { accountId: accountId ?? null }),
 

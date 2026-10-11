@@ -2,7 +2,8 @@
   // Agenda: the period (two weeks from the anchor) as a list, with free-gap hints inside working hours.
   import { app } from "$lib/state/app.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
-  import { dayLabel, dateLabel, freeGaps, hm, isPast, dayKey, type Gap } from "$lib/util/cal";
+  import { busyMinutes, dayLabel, dateLabel, freeGaps, hm, isBusy, isPast, dayKey, type Gap } from "$lib/util/cal";
+  import { fmtMins } from "$lib/util/insights";
   import { isoWeek } from "$lib/util/fmt";
   import EventRow from "./EventRow.svelte";
   import Logo from "./Logo.svelte";
@@ -13,6 +14,10 @@
   const showAccount = $derived(!app.accountFilter && app.accounts.length > 1);
   const ws = $derived(app.settings?.calendar?.workStart ?? "09:00");
   const we = $derived(app.settings?.calendar?.workEnd ?? "17:00");
+  function minsOf(hhmm: string): number {
+    const [h, m] = hhmm.split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  }
   const todayKey = $derived(dayKey(calendar.now));
   const nextId = $derived(calendar.nextUp?.id ?? null);
 
@@ -55,6 +60,8 @@
       {@const overlapIds = calendar.overlapIds(events)}
       {@const allDay = events.filter((e) => e.isAllDay)}
       {@const timed = events.filter((e) => !e.isAllDay)}
+      {@const busyN = timed.filter((e) => isBusy(e)).length}
+      {@const taken = busyMinutes(events, day, minsOf(ws), minsOf(we))}
       {#if weekStartKeys.has(key) && calendar.showWeekNumbers && di > 0}
         <div class="wksep"><span class="mono">week {isoWeek(day)}</span></div>
       {/if}
@@ -63,6 +70,7 @@
           <button class="dayhead" onclick={() => calendar.goto(day, "day")}>
             <span class="dow" class:accent={isToday}>{dayLabel(day, calendar.now)}</span>
             <span class="date mono">{dateLabel(day)}</span>
+            {#if busyN}<span class="sum mono">{busyN} · {fmtMins(taken)}{#if overlapIds.size} <span class="ov">· overlap</span>{/if}</span>{/if}
             {#if isToday && !events.length}<span class="muted">— nothing scheduled</span>{/if}
           </button>
           {#if events.length}
@@ -165,6 +173,13 @@
   .date {
     font-size: 11.5px;
     color: var(--muted);
+  }
+  .sum {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .sum .ov {
+    color: var(--red);
   }
   .muted {
     font-size: 12.5px;

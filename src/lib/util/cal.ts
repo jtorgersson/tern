@@ -137,8 +137,48 @@ export interface Gap {
   mins: number;
 }
 
-/** Free gaps ≥ minMins between busy timed events inside working hours on one day. */
+/** Merged minutes of busy timed events on `day`, clipped to [fromMin, toMin) from local midnight. */
+export function busyMinutes(dayEvents: CalEvent[], day: Date, fromMin: number, toMin: number): number {
+  const origin = startOfDay(day).getTime();
+  const winS = origin + fromMin * 60_000;
+  const winE = origin + toMin * 60_000;
+  const spans = dayEvents
+    .filter((e) => !e.isAllDay && isBusy(e))
+    .map((e) => ({ s: Math.max(new Date(e.start).getTime(), winS), e: Math.min(new Date(e.end).getTime(), winE) }))
+    .filter((x) => x.e > x.s)
+    .sort((a, b) => a.s - b.s);
+  let used = 0;
+  let cursor = winS;
+  for (const b of spans) {
+    const s = Math.max(b.s, cursor);
+    if (b.e > s) used += b.e - s;
+    cursor = Math.max(cursor, b.e);
+  }
+  return Math.round(used / 60_000);
+}
+
+/** "18m left" while an event is happening, or "in 12m" when it starts within 15 minutes. */
+export function clockNote(ev: Pick<CalEvent, "start" | "end">, now = new Date()): { kind: "live" | "soon"; text: string } | null {
+  const s = new Date(ev.start).getTime();
+  const e = new Date(ev.end).getTime();
+  const t = now.getTime();
+  const fmt = (mins: number) => {
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  };
+  if (t >= s && t < e) return { kind: "live", text: `${fmt(Math.max(1, Math.round((e - t) / 60_000)))} left` };
+  if (t < s) {
+    const mins = Math.round((s - t) / 60_000);
+    if (mins >= 1 && mins <= 15) return { kind: "soon", text: `in ${mins}m` };
+  }
+  return null;
+}
+
+/** Free gaps ≥ minMins between busy timed events inside working hours on one day. An all-day busy event blocks the day. */
 export function freeGaps(dayEvents: CalEvent[], day: Date, workStart: string, workEnd: string, minMins = 60): Gap[] {
+  if (dayEvents.some((e) => e.isAllDay && isBusy(e))) return [];
   const [wsH, wsM] = workStart.split(":").map(Number);
   const [weH, weM] = workEnd.split(":").map(Number);
   const ws = new Date(day.getFullYear(), day.getMonth(), day.getDate(), wsH || 9, wsM || 0);

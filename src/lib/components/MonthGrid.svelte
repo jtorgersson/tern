@@ -1,8 +1,10 @@
 <script lang="ts">
   // Month view: Monday-first 6×7 grid with ISO week numbers, up to N chips per day, "+n more" opens the day.
+  import { app } from "$lib/state/app.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
   import type { CalEvent } from "$lib/types";
-  import { dayKey, hm, isBusy, toLocalIso } from "$lib/util/cal";
+  import { busyMinutes, dayKey, hm, isBusy, toLocalIso } from "$lib/util/cal";
+  import { fmtMins } from "$lib/util/insights";
   import { isoWeek, weekdayShort, monthLong } from "$lib/util/fmt";
   import { Lock, Repeat, Video } from "@lucide/svelte";
 
@@ -13,6 +15,12 @@
   const headers = $derived(grid.slice(0, 7).map((d) => weekdayShort(d)));
   const showWeekends = $derived(calendar.showWeekends);
   const nowIso = $derived(toLocalIso(calendar.now));
+  const ws = $derived(mins(app.settings?.calendar.workStart ?? "09:00"));
+  const we = $derived(mins(app.settings?.calendar.workEnd ?? "17:00"));
+  function mins(hhmm: string): number {
+    const [h, m] = hhmm.split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  }
 
   let cellEl: HTMLDivElement | undefined = $state();
   let perCell = $state(3);
@@ -78,6 +86,8 @@
           {#if showWeekends || di < 5}
             {@const k = dayKey(d)}
             {@const evs = byDay.get(k) ?? []}
+            {@const taken = busyMinutes(evs, d, ws, we)}
+            {@const load = taken > 0 ? Math.min(1, taken / Math.max(1, we - ws)) : 0}
             {@const more = evs.length - perCell}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
@@ -85,11 +95,12 @@
               class:out={d.getMonth() !== month}
               class:today={k === todayKey}
               class:we={di >= 5}
+              style:--load={load}
               bind:this={cellEl}
               ondblclick={() => onCellDblClick(d)}
               ondragover={(e) => e.preventDefault()}
               ondrop={(e) => onDrop(e, d)}>
-              <button class="dn" onclick={() => calendar.goto(d, "day")}>
+              <button class="dn" title={taken ? `${fmtMins(taken)} in meetings` : undefined} onclick={() => calendar.goto(d, "day")}>
                 {#if d.getDate() === 1}<span class="mn">{monthLong(d).slice(0, 3)}</span>{/if}
                 {d.getDate()}
               </button>
@@ -197,6 +208,17 @@
     min-height: 0;
     overflow: hidden;
     transition: background var(--t);
+  }
+  .cell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--accent);
+    opacity: calc(var(--load, 0) * 0.16);
+    pointer-events: none;
+  }
+  .cell.out::before {
+    opacity: calc(var(--load, 0) * 0.06);
   }
   .cell:last-child {
     border-right: 0;

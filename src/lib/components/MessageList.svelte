@@ -2,7 +2,7 @@
   import { app } from "$lib/state/app.svelte";
   import { dateGroup } from "$lib/util/time";
   import MessageRow from "./MessageRow.svelte";
-  import { Archive, Trash2, MailOpen, Star, X, Paperclip, AlarmClock, LoaderCircle, Sparkles, Inbox, PanelRightClose, PanelRightOpen } from "@lucide/svelte";
+  import { Archive, Trash2, MailOpen, Star, X, Paperclip, AlarmClock, LoaderCircle, Sparkles, Inbox, PanelRightClose, PanelRightOpen, FolderInput } from "@lucide/svelte";
   import { tick } from "svelte";
 
   let scroller: HTMLDivElement | undefined = $state();
@@ -81,6 +81,7 @@
         <span class="n">{app.checked.size} selected</span>
         <span class="spacer"></span>
         <button class="icon-btn" title="Archive (e)" onclick={() => app.archive()}><Archive size={15} /></button>
+        <button class="icon-btn" title="Move to folder (v)" aria-label="Move selected messages to a folder" onclick={() => app.openMove()}><FolderInput size={15} /></button>
         <button class="icon-btn" title="Mark selected messages read" aria-label="Mark selected messages read" onclick={() => app.setRead([...app.checked], true)}><MailOpen size={15} /></button>
         <button class="icon-btn" title="Snooze selected messages" aria-label="Snooze selected messages" onclick={() => app.openSnooze()}><AlarmClock size={15} /></button>
         <button class="icon-btn" title="Toggle flag" onclick={() => app.toggleFlag()}><Star size={15} /></button>
@@ -146,7 +147,7 @@
       <div class="more"><LoaderCircle size={14} class="spin" /></div>
     {/if}
   </div>
-  <footer><span>{app.checked.size ? `${app.checked.size} selected · ${app.messages.length} loaded` : `${app.messages.length}${app.hasMore ? "+" : ""} messages`}</span><span title="Use j and k to navigate; e to archive">j / k navigate · e archive</span></footer>
+  <footer><span>{app.checked.size ? `${app.checked.size} selected · ${app.messages.length} loaded` : `${app.messages.length}${app.hasMore ? "+" : ""} messages`}</span><span title="Use j and k to navigate; e to archive; v to move">j / k navigate · e archive · v move</span></footer>
 </section>
 
 <style>

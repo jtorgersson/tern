@@ -889,21 +889,93 @@ pub async fn delete(st: &AppState, account_id: &str, id: &str) -> Result<()> {
 }
 
 pub async fn send_new(st: &AppState, m: &OutgoingMessage) -> Result<()> {
-    let body = json!({
-        "message": {
-            "subject": m.subject,
-            "body": { "contentType": "HTML", "content": m.body_html },
-            "toRecipients": recipients(&m.to),
-            "ccRecipients": recipients(&m.cc),
-            "bccRecipients": recipients(&m.bcc),
-        },
-        "saveToSentItems": true
+    let mut message = json!({
+        "subject": m.subject,
+        "body": { "contentType": "HTML", "content": m.body_html },
+        "toRecipients": recipients(&m.to),
+        "ccRecipients": recipients(&m.cc),
+        "bccRecipients": recipients(&m.bcc),
     });
-    let mut body = body;
     if let Some(at) = &m.send_at {
-        body["message"]["singleValueExtendedProperties"] = deferred(at);
+        message["singleValueExtendedProperties"] = deferred(at);
     }
-    call(st, &m.account_id, Method::POST, "/me/sendMail", Some(&body)).await?;
+    if m.attachments.is_empty() {
+        let body = json!({ "message": message, "saveToSentItems": true });
+        call(st, &m.account_id, Method::POST, "/me/sendMail", Some(&body)).await?;
+        return Ok(());
+    }
+    // With files: create a draft, attach, then send (sendMail can't take large attachments).
+    let draft = call(st, &m.account_id, Method::POST, "/me/messages", Some(&message)).await?;
+    let draft_id = draft["id"].as_str().ok_or_else(|| anyhow!("Graph did not return a draft"))?.to_string();
+    let result = async {
+        attach_all(st, &m.account_id, &draft_id, &m.attachments).await?;
+        call(st, &m.account_id, Method::POST, &format!("/me/messages/{draft_id}/send"), None).await?;
+        anyhow::Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = delete(st, &m.account_id, &draft_id).await;
+    }
+    result
+}
+
+/// Graph accepts up to 3 MB inline; larger files go through an upload session in 3.75 MB chunks
+/// (a multiple of 320 KiB, as the API requires).
+const INLINE_ATTACHMENT_MAX: usize = 3 * 1024 * 1024;
+const UPLOAD_CHUNK: usize = 12 * 327_680;
+/// Hard ceiling per file (Graph allows 150 MB per message; keep Tern well under it).
+pub const ATTACHMENT_MAX: usize = 50 * 1024 * 1024;
+
+async fn attach_all(st: &AppState, account_id: &str, draft_id: &str, atts: &[OutgoingAttachment]) -> Result<()> {
+    for a in atts {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(a.data.trim())
+            .map_err(|_| anyhow!("{}: the file could not be read", a.name))?;
+        if bytes.is_empty() {
+            bail!("{} is empty", a.name);
+        }
+        if bytes.len() > ATTACHMENT_MAX {
+            bail!("{} is larger than {} MB", a.name, ATTACHMENT_MAX / 1024 / 1024);
+        }
+        if bytes.len() <= INLINE_ATTACHMENT_MAX {
+            let body = json!({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": a.name,
+                "contentType": a.content_type,
+                "contentBytes": a.data.trim(),
+            });
+            call(st, account_id, Method::POST, &format!("/me/messages/{draft_id}/attachments"), Some(&body)).await?;
+        } else {
+            upload_large(st, account_id, draft_id, a, &bytes).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn upload_large(st: &AppState, account_id: &str, draft_id: &str, a: &OutgoingAttachment, bytes: &[u8]) -> Result<()> {
+    let body = json!({ "AttachmentItem": { "attachmentType": "file", "name": a.name, "contentType": a.content_type, "size": bytes.len() } });
+    let session = call(st, account_id, Method::POST, &format!("/me/messages/{draft_id}/attachments/createUploadSession"), Some(&body)).await?;
+    let url = session["uploadUrl"].as_str().ok_or_else(|| anyhow!("Graph did not open an upload session for {}", a.name))?.to_string();
+    let total = bytes.len();
+    let mut start = 0;
+    while start < total {
+        let end = (start + UPLOAD_CHUNK).min(total);
+        let chunk = bytes[start..end].to_vec();
+        // The session URL is pre-authorized: no bearer token, or Graph rejects the request.
+        let resp = st
+            .http
+            .put(&url)
+            .header(reqwest::header::CONTENT_RANGE, format!("bytes {start}-{}/{total}", end - 1))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(chunk)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            bail!("upload of {} failed ({status}): {}", a.name, text.chars().take(300).collect::<String>());
+        }
+        start = end;
+    }
     Ok(())
 }
 
@@ -939,6 +1011,7 @@ pub async fn send_response(st: &AppState, m: &OutgoingMessage) -> Result<()> {
     }
     let result = async {
         call(st, &m.account_id, Method::PATCH, &format!("/me/messages/{draft_id}"), Some(&patch_body)).await?;
+        attach_all(st, &m.account_id, &draft_id, &m.attachments).await?;
         call(st, &m.account_id, Method::POST, &format!("/me/messages/{draft_id}/send"), None).await?;
         anyhow::Ok(())
     }

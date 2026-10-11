@@ -46,6 +46,10 @@
       { id: "agent", label: "Open Tern agent", group: "Actions", hint: "^J", run: () => app.toggleAgent(true) },
       { id: "pane", label: app.readingPane ? "Hide reading pane" : "Show reading pane", group: "App", hint: "p", run: () => app.toggleReadingPane() },
       ...(app.selectedId ? [{ id: "popout", label: "Open message in new window", group: "Message", hint: "O", run: () => app.openInWindow() }] : []),
+      ...(app.selectedId || app.checked.size ? [{ id: "move", label: app.checked.size > 1 ? `Move ${app.checked.size} messages to folder…` : "Move to folder…", group: "Message", hint: "v", run: () => app.openMove() }] : []),
+      { id: "zoom-in", label: "Larger text in the reader", group: "App", hint: "^+", run: () => app.zoom(0.1) },
+      { id: "zoom-out", label: "Smaller text in the reader", group: "App", hint: "^-", run: () => app.zoom(-0.1) },
+      ...(app.readerScale !== 1 ? [{ id: "zoom-reset", label: "Reset reader text size", group: "App", hint: "^0", run: () => app.zoom(0) }] : []),
       { id: "settings", label: "Settings", group: "App", hint: "^,", run: () => app.openSettings() },
       { id: "settings-ai", label: "Settings: AI providers", group: "App", run: () => app.openSettings("ai") },
       { id: "settings-acc", label: "Settings: Add account", group: "App", run: () => app.openSettings("accounts") },
@@ -93,6 +97,7 @@
         { id: "fwd", label: "Forward", group: "Message", hint: "f", run: () => composer.reply(m, "forward") },
         { id: "arch", label: "Archive", group: "Message", hint: "e", run: () => app.archive([m.id]) },
         { id: "del", label: "Delete", group: "Message", hint: "#", run: () => app.trash([m.id]) },
+        { id: "who", label: `Who is ${m.from.name || m.from.email}?`, group: "Message", run: () => app.showPerson(m.from) },
       );
     }
     return cmds;

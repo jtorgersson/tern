@@ -89,6 +89,8 @@ class CalendarState {
   searchFocusTick = $state(0);
   /** Keyboard time cursor (day/week views). */
   cursor = $state<Cursor | null>(null);
+  /** Bumped to scroll the day/week grid so the current time is in view. */
+  revealNow = $state(0);
   /** Event ids that have local meeting notes. */
   notedIds = $state<Set<string>>(new Set());
 
@@ -285,6 +287,7 @@ class CalendarState {
 
   today() {
     this.goto(this.now);
+    this.revealNow++;
   }
 
   shift(delta: number) {

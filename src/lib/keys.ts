@@ -26,6 +26,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "g j", label: "Join the current / next meeting", group: "App" },
   { keys: "h / l", label: "Calendar: previous / next period", group: "Navigate" },
   { keys: "t", label: "Calendar: today", group: "Navigate" },
+  { keys: ".", label: "Calendar: jump to the current time", group: "Navigate" },
   { keys: "n", label: "Calendar: new event", group: "Compose" },
   { keys: "e", label: "Calendar: edit event", group: "Act" },
   { keys: "↑ ↓ ← →", label: "Calendar: move the time cursor (Shift+↑↓ resizes, Enter creates)", group: "Navigate" },
@@ -38,6 +39,7 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "/", label: "Search mail, calendar, and Connect", group: "Navigate" },
   { keys: "Esc", label: "Close / back", group: "Navigate" },
   { keys: "e", label: "Archive", group: "Act" },
+  { keys: "v", label: "Move to folder", group: "Act" },
   { keys: "#", label: "Delete", group: "Act" },
   { keys: "s", label: "Flag / unflag", group: "Act" },
   { keys: "u", label: "Toggle read", group: "Act" },
@@ -50,10 +52,12 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "R", label: "Reply all", group: "Compose" },
   { keys: "f", label: "Forward", group: "Compose" },
   { keys: "Ctrl Enter", label: "Send", group: "Compose" },
+  { keys: "Ctrl Shift Enter", label: "Send & archive the original", group: "Compose" },
   { keys: "Ctrl J", label: "Ask Tern (agent)", group: "AI" },
   { keys: "t", label: "Summarize thread", group: "AI" },
   { keys: "Ctrl K", label: "Command palette", group: "App" },
   { keys: "Ctrl ,", label: "Settings", group: "App" },
+  { keys: "Ctrl + / Ctrl -", label: "Larger / smaller text in the reader (Ctrl 0 resets)", group: "App" },
   { keys: "Ctrl R", label: "Sync now", group: "App" },
   { keys: "?", label: "Keyboard shortcuts", group: "App" },
 ];
@@ -73,7 +77,9 @@ let gTimer: ReturnType<typeof setTimeout> | undefined;
 /** A pop-out message window: actions on its one message, Esc closes it. */
 function handleMessageWindowKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
-    if (app.snoozeTarget) app.snoozeTarget = null;
+    if (app.moveTarget) app.moveTarget = null;
+    else if (app.snoozeTarget) app.snoozeTarget = null;
+    else if (app.person) app.person = null;
     else if (composer.open && !composer.minimized && (!isTyping(e) || (e.target as HTMLElement).closest("[data-composer]"))) {
       (e.target as HTMLElement).blur?.();
       composer.minimized = true;
@@ -81,11 +87,13 @@ function handleMessageWindowKey(e: KeyboardEvent) {
     else import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().close());
     return;
   }
-  if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || app.snoozeTarget) return;
+  if (zoomKey(e)) return;
+  if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || app.snoozeTarget || app.moveTarget) return;
   const m = app.open;
   if (!m) return;
   const actions: Record<string, () => void> = {
     e: () => app.archive([m.id]),
+    v: () => app.openMove([m.id]),
     "#": () => app.trash([m.id]),
     Delete: () => app.trash([m.id]),
     s: () => app.toggleFlag([m.id]),
@@ -104,6 +112,16 @@ function handleMessageWindowKey(e: KeyboardEvent) {
   }
 }
 
+/** Ctrl + / Ctrl - / Ctrl 0 change the reader text size (not while typing: editors use those too). */
+function zoomKey(e: KeyboardEvent): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || isTyping(e)) return false;
+  const step = e.key === "+" || e.key === "=" ? 0.1 : e.key === "-" ? -0.1 : e.key === "0" ? 0 : null;
+  if (step === null) return false;
+  e.preventDefault();
+  app.zoom(step);
+  return true;
+}
+
 /** Reply / forward the open message, or the selected one when the reading pane is hidden. */
 async function replyTo(mode: "reply" | "replyAll" | "forward") {
   const m = await app.current();
@@ -114,7 +132,7 @@ export function handleKey(e: KeyboardEvent) {
   if (e.defaultPrevented) return;
   if (app.windowKind === "message") return handleMessageWindowKey(e);
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === "a" && !isTyping(e) && !app.isCanvasView && !search.open && !app.paletteOpen && !app.settingsOpen && !app.cheatsheetOpen && !app.snoozeTarget && !composer.open && !calendar.composerOpen && !app.agentOpen && !connect.expanded && !(e.target as HTMLElement | null)?.closest("[data-connect]")) {
+  if (mod && e.key.toLowerCase() === "a" && !isTyping(e) && !app.isCanvasView && !search.open && !app.paletteOpen && !app.settingsOpen && !app.cheatsheetOpen && !app.snoozeTarget && !app.moveTarget && !composer.open && !calendar.composerOpen && !app.agentOpen && !connect.expanded && !(e.target as HTMLElement | null)?.closest("[data-connect]")) {
     e.preventDefault();
     app.selectAllLoaded();
     return;
@@ -143,6 +161,7 @@ export function handleKey(e: KeyboardEvent) {
     app.syncNow();
     return;
   }
+  if (zoomKey(e)) return;
   if (search.open && !app.paletteOpen && !app.settingsOpen) {
     if (e.key === "Escape") { e.preventDefault(); search.close(); }
     else if (e.key === "/" && !isTyping(e)) { e.preventDefault(); app.searchFocusTick++; }
@@ -154,8 +173,10 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Escape") {
-    if (app.snoozeTarget) app.snoozeTarget = null;
+    if (app.moveTarget) app.moveTarget = null;
+    else if (app.snoozeTarget) app.snoozeTarget = null;
     else if (app.paletteOpen) app.paletteOpen = false;
+    else if (app.person && !isTyping(e)) app.person = null;
     else if (app.cheatsheetOpen) app.cheatsheetOpen = false;
     else if (app.settingsOpen) app.settingsOpen = false;
     else if (composer.open && !composer.minimized && (!isTyping(e) || (e.target as HTMLElement).closest("[data-composer]"))) {
@@ -194,7 +215,7 @@ export function handleKey(e: KeyboardEvent) {
   // AltGr (Ctrl+Alt on Windows, Option on macOS) is how Nordic layouts type [ and ]: let those through.
   const altGrBracket = (e.key === "[" || e.key === "]") && (e.getModifierState?.("AltGraph") || (e.ctrlKey && e.altKey) || (e.altKey && !e.ctrlKey && !e.metaKey));
   if (isTyping(e) || ((mod || e.altKey) && !altGrBracket)) return;
-  if (app.paletteOpen || app.settingsOpen || app.snoozeTarget || !app.hasAccounts) return;
+  if (app.paletteOpen || app.settingsOpen || app.snoozeTarget || app.moveTarget || !app.hasAccounts) return;
 
   if (pendingG) {
     pendingG = false;
@@ -251,6 +272,7 @@ export function handleKey(e: KeyboardEvent) {
       l: () => calendar.next(),
       ArrowRight: () => (grid && calendar.cursor ? calendar.moveCursor(1, 0) : calendar.next()),
       t: () => calendar.today(),
+      ".": () => calendar.today(),
       "/": () => app.searchFocusTick++,
       "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
       g: () => {
@@ -276,6 +298,7 @@ export function handleKey(e: KeyboardEvent) {
     O: () => app.openInWindow(),
     p: () => app.toggleReadingPane(),
     e: () => app.archive(),
+    v: () => app.openMove(),
     "#": () => app.trash(),
     Delete: () => app.trash(),
     s: () => app.toggleFlag(),

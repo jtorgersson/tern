@@ -46,6 +46,7 @@
       bind:value={q}
       aria-label="Search mail, calendar, and Connect"
       placeholder="Search mail, calendar, and Connect…"
+      title="Mail understands from:  to:  subject:  has:attachment  is:unread  is:flagged  in:sent  before:2026-10-01  after:7d"
       spellcheck="false"
       onkeydown={(e) => {
         if (e.key === "Escape" && q) {

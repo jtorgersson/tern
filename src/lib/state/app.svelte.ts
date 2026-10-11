@@ -8,6 +8,7 @@ import { setLocale } from "$lib/util/fmt";
 import {
   EVENTS,
   type Account,
+  type Addr,
   type AiCategory,
   type AuthProgressEvent,
   type Folder,
@@ -102,6 +103,25 @@ class AppState {
   onboarding = $state(false);
   searchFocusTick = $state(0);
 
+  // ---- reader zoom (Ctrl + / Ctrl - / Ctrl 0) ----
+  readerScale = $state(1);
+
+  zoom(step: number) {
+    const next = step === 0 ? 1 : Math.round(Math.min(1.6, Math.max(0.7, this.readerScale + step)) * 100) / 100;
+    this.readerScale = next;
+    try {
+      localStorage.setItem("tern.readerScale", String(next));
+    } catch {}
+    toasts.show(`Text ${Math.round(next * 100)}%`, { kind: "success", timeout: 1200 });
+  }
+
+  private loadReaderScale() {
+    try {
+      const v = Number(localStorage.getItem("tern.readerScale"));
+      if (v >= 0.7 && v <= 1.6) this.readerScale = v;
+    } catch {}
+  }
+
   // ---- ai ----
   triaging = $state(false);
 
@@ -138,6 +158,7 @@ class AppState {
       this.theme = boot.theme;
       applyTheme(boot.theme, this.themeOpts());
       configureAi(() => this.settings!);
+      this.loadReaderScale();
       await this.listenAll();
       if (this.accounts.length) {
         // Today is the home screen when AI is set up; otherwise start in the inbox.
@@ -150,6 +171,7 @@ class AppState {
         import("./calendar.svelte").then(({ calendar }) => calendar.load({ silent: true }));
         const mailto = await invoke<string | null>("take_pending_mailto");
         if (mailto) this.openMailto(mailto);
+        else import("./composer.svelte").then(({ composer }) => composer.restore());
       }
     } catch (e) {
       this.bootError = errMsg(e);
@@ -169,6 +191,7 @@ class AppState {
       this.theme = boot.theme;
       applyTheme(boot.theme, this.themeOpts());
       configureAi(() => this.settings!);
+      this.loadReaderScale();
       this.unlisten.push(
         await listen<Theme>(EVENTS.themeChanged, (e) => {
           this.theme = e.payload;
@@ -816,21 +839,39 @@ class AppState {
     }
   }
 
-  async archive(ids = this.targetIds()) {
-    await this.moveTo(ids, "archive", ids.length > 1 ? `Archived ${ids.length} messages` : "Archived");
+  async archive(ids = this.targetIds(), quiet = false) {
+    await this.moveTo(ids, "archive", ids.length > 1 ? `Archived ${ids.length} messages` : "Archived", false, quiet);
   }
 
   async trash(ids = this.targetIds()) {
     await this.moveTo(ids, "deleteditems", ids.length > 1 ? `Deleted ${ids.length} messages` : "Deleted", true);
   }
 
-  async moveTo(ids: string[], destination: string, label?: string, isDelete = false) {
+  /** Messages the folder picker (v) is open for. */
+  moveTarget = $state<string[] | null>(null);
+
+  openMove(ids = this.targetIds()) {
+    if (ids.length) this.moveTarget = ids;
+  }
+
+  /** The person card (click a name in the reader). */
+  person = $state<Addr | null>(null);
+
+  showPerson(addr: Addr | null) {
+    this.person = addr && addr.email ? { name: addr.name, email: addr.email } : null;
+  }
+
+  async moveTo(ids: string[], destination: string, label?: string, isDelete = false, quiet = false) {
     if (!ids.length) return;
     const removed = this.removeLocal(ids);
     try {
       if (isDelete) await api.remove(ids);
       else await api.move(ids, destination);
       this.notifyOthers();
+      if (quiet) {
+        this.refreshCounts();
+        return;
+      }
       toasts.show(label ?? "Moved", {
         kind: "success",
         timeout: 6000,

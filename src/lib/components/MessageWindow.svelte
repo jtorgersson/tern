@@ -6,6 +6,8 @@
   import Reader from "./Reader.svelte";
   import Composer from "./Composer.svelte";
   import SnoozePicker from "./SnoozePicker.svelte";
+  import FolderPicker from "./FolderPicker.svelte";
+  import PersonCard from "./PersonCard.svelte";
 
   let shown = $state(false);
 
@@ -32,6 +34,8 @@
 </div>
 <Composer />
 <SnoozePicker />
+<FolderPicker />
+<PersonCard />
 
 <style>
   .win {
