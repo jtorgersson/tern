@@ -65,7 +65,7 @@
 
   <div class="body">
     <div class="line1">
-      {#if !compact && !m.isRead}<span class="udot on inline"></span>{/if}
+      {#if !m.isRead}<span class="udot" aria-hidden="true"></span>{/if}
       <span class="from">{isSentView ? "To: " : ""}{displayName(who)}</span>
       {#if m.importance === "high" || m.ai?.priority === 3}<span class="prio" title="High priority">!</span>{/if}
       <span class="spacer"></span>
@@ -161,6 +161,11 @@
   .avatar-wrap {
     display: grid;
     border-radius: 50%;
+    transition: opacity var(--t);
+  }
+  /* Read mail fades a notch so unread rows stand out without any extra ink. */
+  .row:not(.unread):not(.checked) .avatar-wrap {
+    opacity: 0.68;
   }
   .tick {
     display: grid;
@@ -186,24 +191,28 @@
   }
   .from {
     font-size: 13px;
-    font-weight: 500;
-    color: var(--fg-dim);
+    font-weight: 450;
+    color: color-mix(in oklab, var(--fg-dim) 80%, var(--muted));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .unread .from {
     color: var(--fg-bright);
-    font-weight: 650;
+    font-weight: 700;
   }
   .udot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     flex: none;
-  }
-  .udot.on {
     background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .compact .udot {
+    width: 7px;
+    height: 7px;
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
   .prio {
     font-weight: 800;
@@ -228,6 +237,7 @@
   }
   .unread .time {
     color: var(--accent);
+    font-weight: 600;
   }
   .hover-actions {
     display: none;
@@ -270,14 +280,17 @@
     flex: 1;
     min-width: 0;
     font-size: 13px;
-    color: var(--fg-dim);
+    color: color-mix(in oklab, var(--fg-dim) 80%, var(--muted));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .unread .subject {
-    color: var(--fg);
-    font-weight: 550;
+    color: var(--fg-bright);
+    font-weight: 620;
+  }
+  .unread .line3 {
+    color: var(--fg-dim);
   }
   .line3 {
     display: flex;
