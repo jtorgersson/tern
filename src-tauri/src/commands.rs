@@ -317,7 +317,7 @@ pub fn messages_list(st: St, query: MessageQuery) -> R<Vec<MessageSummary>> {
     st.db.list(&query).map_err(err)
 }
 
-async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
+pub(crate) async fn load_full(st: &AppState, id: &str) -> anyhow::Result<MessageFull> {
     let summary = st.db.summary(id)?.ok_or_else(|| anyhow::anyhow!("Message not found (it may have been moved or deleted)"))?;
     let mut body = match st.db.body(id)? {
         Some(b) => b,

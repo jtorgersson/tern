@@ -1,4 +1,5 @@
 mod auth;
+mod automation;
 mod calendar;
 mod commands;
 mod connect;
@@ -13,6 +14,11 @@ mod theme;
 
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+
+/// Run the headless API/MCP entry points before initializing the desktop runtime.
+pub fn run_automation(args: &[String]) -> anyhow::Result<()> {
+    tokio::runtime::Runtime::new()?.block_on(automation::run(args))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

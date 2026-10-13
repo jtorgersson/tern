@@ -37,7 +37,7 @@ pub struct Folder {
     pub total: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, schemars::JsonSchema)]
 pub struct Addr {
     pub name: String,
     pub email: String,
@@ -322,7 +322,7 @@ pub struct InviteInfo {
     pub conflicts: Vec<CalEvent>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDraft {
     pub account_id: String,
@@ -401,7 +401,7 @@ where
     Deserialize::deserialize(d).map(Some)
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FreeSlotQuery {
     pub account_id: String,

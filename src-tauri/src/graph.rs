@@ -106,10 +106,12 @@ pub(crate) async fn call(st: &AppState, account_id: &str, method: Method, url: &
     Ok(serde_json::from_str(&text)?)
 }
 
-/// Sends a chat message once. An uncertain delivery must be resolved by refreshing the conversation.
+/// Executes an externally visible POST once. Never retry uncertain delivery.
 pub(crate) async fn call_once(st: &AppState, account_id: &str, path: &str, body: &Value) -> Result<Value> {
     let token = auth::access_token(st, account_id).await?;
-    let resp = st.http.post(format!("{BASE}{path}")).bearer_auth(token).json(body).send().await?;
+    let url = scoped(st, account_id, path);
+    let resp = st.http.post(format!("{BASE}{url}")).bearer_auth(token)
+        .header("Prefer", "IdType=\"ImmutableId\"").json(body).send().await?;
     let status = resp.status();
     let text = resp.text().await?;
     let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -120,6 +122,7 @@ pub(crate) async fn call_once(st: &AppState, account_id: &str, path: &str, body:
             message: v.pointer("/error/message").and_then(Value::as_str).unwrap_or(&text).into(),
         }.into());
     }
+    if text.trim().is_empty() { return Ok(Value::Null); }
     Ok(serde_json::from_str(&text)?)
 }
 
@@ -449,6 +452,8 @@ fn normalize_recurrence(mut r: Value, start: &str, tz: &str) -> Value {
 
 pub async fn create_event(st: &AppState, tz: &str, d: &EventDraft) -> Result<CalEvent> {
     let mut body = json!({
+        // Graph deduplicates retries of the same creation request after transient failures.
+        "transactionId": uuid::Uuid::new_v4().to_string(),
         "subject": d.subject,
         "start": { "dateTime": d.start, "timeZone": tz },
         "end": { "dateTime": d.end, "timeZone": tz },

@@ -23,6 +23,30 @@ Tauri 2 (Rust backend, WebKitGTK) + SvelteKit SPA (Svelte 5 runes) + TypeScript.
 └──────────────────────────────────────────────────┘
 ```
 
+## External automation
+
+`automation.rs` exposes a shared typed service through native `tern --mcp`
+(stdio, Rust MCP SDK) and `tern --api [PORT]` (Axum HTTP, IPv4 loopback only).
+The modes are selected before the desktop/single-instance runtime initializes.
+They use the same `AppState`, SQLite WAL cache and Microsoft keyring credentials
+as the desktop. MCP discovery and HTTP `GET /v1/tools` share schemas generated
+with schemars; `POST /v1/{operation}` dispatches the same operations as MCP.
+The HTTP middleware enforces bearer authentication, exact loopback Host,
+no browser Origin, and a 1 MiB request limit. Tokens are user-provided through
+`TERN_API_TOKEN` or generated into a mode-0600 config file.
+
+Calendar reads can refresh the selected range live with per-account fallback
+warnings. Mail search reads the desktop's cache and reports its source; bodies
+load through the existing mail loader. Headless processes do not start the UI's
+background sync or notifications. Connect wrappers delegate to shared service
+functions, retaining account consent checks and bounded Graph pagination.
+External mail/Teams sends use single-attempt POSTs; empty Microsoft 202/204
+responses are successful. Draft creation is separate from sending. Event
+creation includes a transaction ID for retry deduplication. Account checks,
+ID encoding, local-time validation and pagination bounds are enforced in the
+service, independent of client tool metadata. See [automation](docs/automation.md)
+for the contract and installation/registration instructions.
+
 ## Contract
 * `src/lib/types.ts` — every type crossing the boundary (Rust mirrors in `model.rs`, camelCase serde).
 * `src/lib/api.ts` — mail/calendar commands; `src/lib/connect.ts` — Connect commands and Graph response types. Rust command names are the strings passed to `invoke`.

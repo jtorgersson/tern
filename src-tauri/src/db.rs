@@ -530,6 +530,13 @@ impl Db {
         Ok(Db(Arc::new(Mutex::new(conn))))
     }
 
+    #[cfg(test)]
+    pub(crate) fn memory() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(SCHEMA)?;
+        Ok(Db(Arc::new(Mutex::new(conn))))
+    }
+
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }

@@ -1,6 +1,6 @@
 [package]
 name = "tern"
-version = "0.3.0"
+version = "0.4.0"
 description = "Mail, calendar, and conversations for Omarchy"
 authors = ["John Torgersson"]
 edition = "2021"
@@ -38,6 +38,12 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1"
 futures = "0.3"
 log = "0.4"
+axum = "0.8"
+rmcp = { version = "3.5.1", features = ["server", "transport-io"] }
+schemars = "1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 codegen-units = 1

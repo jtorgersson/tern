@@ -2,5 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tern_lib::run()
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "--mcp" | "--api" | "--help" | "--version"))
+    {
+        if let Err(e) = tern_lib::run_automation(&args) {
+            eprintln!("Tern: {e:#}");
+            std::process::exit(1);
+        }
+    } else {
+        tern_lib::run()
+    }
 }

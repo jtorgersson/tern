@@ -50,7 +50,7 @@ pub async fn connect_enable(app: AppHandle, st: St<'_>, account_id: String) -> R
     result.map_err(|e| format!("{e:#}"))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Resource {
     Chats,
@@ -123,6 +123,10 @@ fn friendly_error(e: anyhow::Error) -> String {
 
 #[tauri::command]
 pub async fn connect_list(st: St<'_>, account_id: String, resource: Resource, next: Option<String>) -> Result<Value, String> {
+    list(&st, account_id, resource, next).await
+}
+
+pub(crate) async fn list(st: &AppState, account_id: String, resource: Resource, next: Option<String>) -> Result<Value, String> {
     account(&st, &account_id, true).map_err(friendly_error)?;
     let url = page_url(&resource, next.as_deref()).map_err(friendly_error)?;
     graph::call(&st, &account_id, Method::GET, &url, None).await.map_err(friendly_error)
@@ -130,6 +134,10 @@ pub async fn connect_list(st: St<'_>, account_id: String, resource: Resource, ne
 
 #[tauri::command]
 pub async fn connect_send(st: St<'_>, account_id: String, resource: Resource, text: String) -> Result<Value, String> {
+    send(&st, account_id, resource, text).await
+}
+
+pub(crate) async fn send(st: &AppState, account_id: String, resource: Resource, text: String) -> Result<Value, String> {
     account(&st, &account_id, true).map_err(friendly_error)?;
     if !resource.can_send() { return Err("Select a chat or channel first".into()); }
     let text = text.trim();
@@ -158,6 +166,10 @@ fn people_path(query: &str) -> Result<String> {
 
 #[tauri::command]
 pub async fn connect_people(st: St<'_>, account_id: String, query: String) -> Result<Value, String> {
+    people(&st, account_id, query).await
+}
+
+pub(crate) async fn people(st: &AppState, account_id: String, query: String) -> Result<Value, String> {
     compose_account(&st, &account_id).map_err(friendly_error)?;
     let path = people_path(&query).map_err(friendly_error)?;
     graph::call(&st, &account_id, Method::GET, &path, None).await.map_err(friendly_error)
@@ -207,6 +219,10 @@ pub async fn connect_create_chat(st: St<'_>, account_id: String, user_ids: Vec<S
 
 #[tauri::command]
 pub async fn connect_search(st: St<'_>, account_id: String, query: String, from: u32) -> Result<Value, String> {
+    search(&st, account_id, query, from).await
+}
+
+pub(crate) async fn search(st: &AppState, account_id: String, query: String, from: u32) -> Result<Value, String> {
     account(&st, &account_id, true).map_err(friendly_error)?;
     if query.trim().is_empty() || query.len() > 1000 || from > 1000 { return Err("Use a query up to 1,000 characters and refine searches beyond 1,000 results".into()); }
     let body = json!({ "requests": [{ "entityTypes": ["chatMessage"], "query": { "queryString": query.trim() }, "from": from, "size": 25, "enableTopResults": true }] });
@@ -215,6 +231,10 @@ pub async fn connect_search(st: St<'_>, account_id: String, query: String, from:
 
 #[tauri::command]
 pub async fn connect_message(st: St<'_>, account_id: String, resource: Resource, message_id: String) -> Result<Value, String> {
+    message(&st, account_id, resource, message_id).await
+}
+
+pub(crate) async fn message(st: &AppState, account_id: String, resource: Resource, message_id: String) -> Result<Value, String> {
     account(&st, &account_id, true).map_err(friendly_error)?;
     if !resource.can_send() { return Err("Select a conversation".into()); }
     let path = format!("{}/{}", resource.path().map_err(friendly_error)?, segment(&message_id).map_err(friendly_error)?);

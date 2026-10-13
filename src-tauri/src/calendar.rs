@@ -49,14 +49,26 @@ fn to_utc_str(t: NaiveDateTime) -> String {
 
 /// Refreshes the calendar list and downloads [from, to) from every calendar of the account into the cache.
 async fn pull_range(st: &AppState, acc: &Account, from: NaiveDateTime, to: NaiveDateTime) -> Result<Vec<CalEvent>> {
+    Ok(pull_range_report(st, acc, from, to).await?.events)
+}
+
+pub(crate) struct RangeRefresh {
+    pub events: Vec<CalEvent>,
+    pub warnings: Vec<String>,
+}
+
+/// Preserve cached events for failed calendars and expose incomplete refreshes to callers.
+pub(crate) async fn pull_range_report(st: &AppState, acc: &Account, from: NaiveDateTime, to: NaiveDateTime) -> Result<RangeRefresh> {
     let tz = local_tz();
     let (from_utc, to_utc) = (to_utc_str(from), to_utc_str(to));
+    let mut warnings = Vec::new();
     // Calendars list: tenants that block it still get the default calendar.
     let cals = match graph::calendars(st, &acc.id).await {
         Ok(c) if !c.is_empty() => c,
         Ok(_) => vec![],
         Err(e) => {
             log::warn!("calendars list failed for {}: {e:#}", acc.email);
+            warnings.push(format!("Calendar discovery failed; using the cached list or default calendar: {e:#}"));
             let cached = st.db.calendars(Some(&acc.id)).unwrap_or_default();
             // Someone who shared only their calendar folder: the list is off limits, the calendar itself isn't.
             if cached.is_empty() && acc.owner_id.is_some() {
@@ -78,6 +90,8 @@ async fn pull_range(st: &AppState, acc: &Account, from: NaiveDateTime, to: Naive
                 // A single broken shared calendar must not hide the others.
                 Err(e) => {
                     log::warn!("calendarView failed for {} / {}: {e:#}", acc.email, c.name);
+                    warnings.push(format!("Calendar {} could not refresh; its events are cached: {e:#}", c.name));
+                    events.extend(st.db.events(&fmt(from), &fmt(to), Some(&acc.id))?.into_iter().filter(|e| e.calendar_id == c.id));
                     if c.is_default {
                         first_err.get_or_insert(e);
                     }
@@ -93,7 +107,7 @@ async fn pull_range(st: &AppState, acc: &Account, from: NaiveDateTime, to: Naive
     events.retain(|e| seen.insert(e.id.clone()));
     events.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
     st.db.replace_events(&acc.id, &fmt(from), &fmt(to), &events)?;
-    Ok(events)
+    Ok(RangeRefresh { events, warnings })
 }
 
 pub async fn sync_account(app: &AppHandle, st: &AppState, acc: &Account) -> Result<()> {
@@ -199,6 +213,10 @@ pub fn propose_slots(
 
 
 pub async fn free_slots(st: &AppState, q: &FreeSlotQuery) -> Result<Vec<FreeSlot>> {
+    Ok(free_slots_report(st, q).await?.0)
+}
+
+pub(crate) async fn free_slots_report(st: &AppState, q: &FreeSlotQuery) -> Result<(Vec<FreeSlot>, Option<String>)> {
     let settings = st.settings.read().unwrap().clone();
     let (ws, we) = crate::settings::work_hours(&settings);
     let work_start = parse_hm(q.work_start.as_deref().unwrap_or(&ws), NaiveTime::from_hms_opt(9, 0, 0).unwrap());
@@ -213,6 +231,7 @@ pub async fn free_slots(st: &AppState, q: &FreeSlotQuery) -> Result<Vec<FreeSlot
 
     let interval = 15;
     let mut busy: Vec<(NaiveDateTime, NaiveDateTime)> = Vec::new();
+    let mut warning = None;
     match graph::get_schedule(st, &q.account_id, &tz, &emails, &fmt(from), &fmt(to), interval).await {
         Ok(views) if !views.is_empty() => {
             for view in views {
@@ -226,8 +245,9 @@ pub async fn free_slots(st: &AppState, q: &FreeSlotQuery) -> Result<Vec<FreeSlot
         }
         // Personal accounts (and tenants that block free/busy): fall back to our own cached calendar.
         Ok(_) | Err(_) => {
+            warning = Some("Live free/busy was unavailable. Slots use only this account's cached events; attendee availability has not been verified.".to_string());
             for e in st.db.events(&fmt(from), &fmt(to), Some(&q.account_id))? {
-                if e.is_cancelled || e.response == "declined" || e.show_as == "free" || e.is_all_day {
+                if e.is_cancelled || e.response == "declined" || e.show_as == "free" {
                     continue;
                 }
                 if let (Some(s), Some(en)) = (parse(&e.start), parse(&e.end)) {
@@ -236,7 +256,7 @@ pub async fn free_slots(st: &AppState, q: &FreeSlotQuery) -> Result<Vec<FreeSlot
             }
         }
     }
-    Ok(propose_slots(&busy, from, to, now_local(), q.duration_mins, work_start, work_end, 12))
+    Ok((propose_slots(&busy, from, to, now_local(), q.duration_mins, work_start, work_end, 12), warning))
 }
 
 /// Desktop notification shortly before each meeting.

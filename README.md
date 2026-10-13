@@ -110,6 +110,15 @@ bun tauri dev            # development
 
 On NVIDIA + Wayland, if the window renders blank, start Tern with `TERN_NO_DMABUF=1 tern`.
 
+## Automation — 0.4.0
+
+Tern now exposes mail, calendar and Teams tools through a native MCP server and
+an authenticated local HTTP API. Connect Codex with
+`./scripts/install.sh --register-mcp`, then start a new Codex session and ask it
+to use Tern. The server reuses your existing accounts and keyring credentials
+and runs without opening the desktop window. Use `tern --api` for the private
+HTTP API. See [automation setup, tools and API examples](docs/automation.md).
+
 ## Keys
 
 | | |
