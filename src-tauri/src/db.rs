@@ -158,6 +158,36 @@ CREATE TABLE IF NOT EXISTS calendars (
   sort INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+  rowid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'text',
+  category TEXT NOT NULL DEFAULT 'Inbox',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  summary TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'capture',
+  source_path TEXT,
+  mime TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  edited INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  analyzed_at TEXT,
+  file_mtime INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS notes_source_path ON notes(source_path) WHERE source_path IS NOT NULL;
+CREATE INDEX IF NOT EXISTS notes_updated ON notes(updated_at DESC);
+CREATE INDEX IF NOT EXISTS notes_category ON notes(category);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+  title, body, summary, tags,
+  content = '', contentless_delete = 1,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   subject, sender, preview, body,
   content = '', contentless_delete = 1,

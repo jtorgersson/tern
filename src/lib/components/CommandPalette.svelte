@@ -5,6 +5,7 @@
   import { search } from "$lib/state/search.svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { calendar } from "$lib/state/calendar.svelte";
+  import { notes } from "$lib/state/notes.svelte";
   import { fuzzyScore } from "$lib/util/fuzzy";
   import type { WellKnownFolder } from "$lib/types";
   import { tick } from "svelte";
@@ -58,6 +59,9 @@
       { id: "connect", label: connect.open ? "Close Connect" : "Open Connect beside mail and calendar", group: "App", hint: "g b", run: () => connect.toggle() },
       { id: "today", label: "Go to Today", group: "Go to", hint: "g t", run: go({ kind: "today" }) },
       { id: "calendar", label: "Go to Calendar", group: "Go to", hint: "g c", run: go({ kind: "calendar" }) },
+      { id: "notes", label: "Go to Notes", group: "Go to", hint: "g n", run: go({ kind: "notes" }) },
+      { id: "new-note", label: "New note", group: "Actions", hint: "n", run: () => { app.setView({ kind: "notes" }); notes.startCapture(); } },
+      { id: "import-notes", label: "Import notes from OneDrive/notes", group: "Actions", run: () => { app.setView({ kind: "notes" }); notes.importOneDrive(); } },
       { id: "cal-day", label: "Calendar: Day view", group: "Go to", hint: "d", run: () => { app.setView({ kind: "calendar" }); calendar.setView("day"); } },
       { id: "cal-week", label: "Calendar: Week view", group: "Go to", hint: "w", run: () => { app.setView({ kind: "calendar" }); calendar.setView("week"); } },
       { id: "cal-month", label: "Calendar: Month view", group: "Go to", hint: "m", run: () => { app.setView({ kind: "calendar" }); calendar.setView("month"); } },

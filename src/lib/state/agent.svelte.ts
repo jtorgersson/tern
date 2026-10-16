@@ -39,7 +39,7 @@ class AgentState {
         context: () => ({
           accountId: app.accountFilter,
           openMessageId: app.open?.id ?? null,
-          view: app.view.kind === "results" ? undefined : app.view,
+          view: app.view.kind === "results" || app.view.kind === "notes" ? undefined : app.view,
         }),
       });
     }

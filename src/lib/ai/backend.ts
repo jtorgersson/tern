@@ -4,12 +4,19 @@ import type { AiProvider } from "../types";
 
 export type Effort = "low" | "medium" | "high";
 
+export interface MediaImage {
+  mediaType: string;
+  base64: string;
+}
+
 export interface TextRequest {
   system: string;
   user: string;
   effort: Effort;
   maxTokens: number;
   signal?: AbortSignal;
+  /** Optional pictures for a vision request. Ignored by plain text streaming. */
+  images?: MediaImage[];
 }
 
 export interface StructuredRequest<T> extends TextRequest {

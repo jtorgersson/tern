@@ -11,6 +11,11 @@ fn main() {
             eprintln!("Tern: {e:#}");
             std::process::exit(1);
         }
+    } else if let tern_lib::NoteCli::Text(text) = tern_lib::parse_note_cli(&args) {
+        if let Err(e) = tern_lib::capture_note_cli(&text) {
+            eprintln!("Tern: {e:#}");
+            std::process::exit(1);
+        }
     } else {
         tern_lib::run()
     }

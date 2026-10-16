@@ -28,6 +28,21 @@ const NO_EFFORT = /haiku|claude-3|sonnet-4-5|sonnet-4-0|opus-4-0|opus-4-1|sonnet
 
 const EPHEMERAL = { type: "ephemeral" as const };
 
+function userContent(req: { user: string; images?: { mediaType: string; base64: string }[] }): string | BetaContentBlockParam[] {
+  const images = req.images?.filter((im) => im.base64) ?? [];
+  if (!images.length) return req.user;
+  const blocks: BetaContentBlockParam[] = images.map((im) => ({
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: im.mediaType as "image/jpeg",
+      data: im.base64,
+    },
+  }));
+  blocks.push({ type: "text", text: req.user });
+  return blocks;
+}
+
 export class AnthropicBackend implements Backend {
   private client: Anthropic;
 
@@ -87,7 +102,7 @@ export class AnthropicBackend implements Backend {
         ...common,
         max_tokens: req.maxTokens,
         system: [{ type: "text", text: req.system, cache_control: EPHEMERAL }],
-        messages: [{ role: "user", content: req.user }],
+        messages: [{ role: "user", content: userContent(req) }],
         output_config: {
           ...(common.output_config ?? {}),
           format: betaZodOutputFormat(req.schema as z.ZodType<T>),

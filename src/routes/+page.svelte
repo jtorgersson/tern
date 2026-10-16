@@ -11,6 +11,7 @@
   import Reader from "$lib/components/Reader.svelte";
   import Today from "$lib/components/Today.svelte";
   import Calendar from "$lib/components/Calendar.svelte";
+  import Notes from "$lib/components/Notes.svelte";
   import EventComposer from "$lib/components/EventComposer.svelte";
   import EventDetails from "$lib/components/EventDetails.svelte";
   import Composer from "$lib/components/Composer.svelte";
@@ -25,10 +26,12 @@
   import Toasts from "$lib/components/Toasts.svelte";
   import Logo from "$lib/components/Logo.svelte";
   import MessageWindow from "$lib/components/MessageWindow.svelte";
-  import { messageWindowId } from "$lib/util/windows";
+  import { captureWindow, messageWindowId } from "$lib/util/windows";
+  import QuickCapture from "$lib/components/QuickCapture.svelte";
 
   /** Set when this webview is a pop-out window for one message. */
   const popupId = messageWindowId();
+  const isCapture = captureWindow();
 
   const LIST_KEY = "tern.listWidth";
   let listWidth = $state(420);
@@ -85,7 +88,9 @@
 
 <svelte:window onkeydown={handleKey} />
 
-{#if !app.ready}
+{#if isCapture}
+  <QuickCapture mode="window" />
+{:else if !app.ready}
   <div class="splash" data-tauri-drag-region><div class="pulse"><Logo size={40} /></div></div>
 {:else if app.bootError}
   <div class="splash" data-tauri-drag-region>
@@ -110,6 +115,8 @@
           <Today />
         {:else if app.view.kind === "calendar"}
           <Calendar />
+        {:else if app.view.kind === "notes"}
+          <Notes />
         {:else}
           <MessageList />
           {#if app.readingPane}

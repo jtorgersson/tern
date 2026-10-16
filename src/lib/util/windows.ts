@@ -8,6 +8,15 @@ function labelFor(id: string): string {
   return `msg-${(h >>> 0).toString(36)}`;
 }
 
+/** This webview is the floating quick-capture window. */
+export function captureWindow(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("capture") === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** The message id when this webview is a pop-out message window. */
 export function messageWindowId(): string | null {
   try {

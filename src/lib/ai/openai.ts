@@ -57,11 +57,21 @@ export class OpenAIBackend implements Backend {
   async structured<T>(req: StructuredRequest<T>): Promise<T> {
     const schema = z.toJSONSchema(req.schema as z.ZodType, { target: "draft-7" }) as Record<string, unknown>;
     delete schema.$schema;
+    const instruction = `${req.user}\n\nRespond with only a JSON object matching this JSON Schema:\n${JSON.stringify(schema)}`;
+    const images = req.images?.filter((im) => im.base64) ?? [];
     const messages: ChatCompletionMessageParam[] = [
       { role: "system", content: req.system },
       {
         role: "user",
-        content: `${req.user}\n\nRespond with only a JSON object matching this JSON Schema:\n${JSON.stringify(schema)}`,
+        content: images.length
+          ? [
+              { type: "text", text: instruction },
+              ...images.map((im) => ({
+                type: "image_url" as const,
+                image_url: { url: `data:${im.mediaType};base64,${im.base64}` },
+              })),
+            ]
+          : instruction,
       },
     ];
     const formats = [

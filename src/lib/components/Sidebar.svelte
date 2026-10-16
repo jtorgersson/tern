@@ -18,6 +18,7 @@
     Sun,
     CalendarDays,
     AlarmClock,
+    NotebookPen,
   } from "@lucide/svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { MessageCircle } from "@lucide/svelte";
@@ -121,6 +122,10 @@
         <CalendarDays size={15} />
         <span class="name">Calendar</span>
         {#if calendar.unanswered.length}<span class="count strong" title="Invitations awaiting your response">{calendar.unanswered.length}</span>{:else if calendar.todayMeetings.length}<span class="count">{calendar.todayMeetings.length}</span>{/if}
+      </button>
+      <button class="item" class:active={isActive({ kind: "notes" })} onclick={() => app.setView({ kind: "notes" })} title="Notes (g n)">
+        <NotebookPen size={15} />
+        <span class="name">Notes</span>
       </button>
       <button class="item" class:active={connect.open} onclick={() => connect.toggle()} title="Connect beside mail and calendar (g b)">
         <MessageCircle size={15} /><span class="name">Connect</span>

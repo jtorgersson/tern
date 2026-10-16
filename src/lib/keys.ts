@@ -4,6 +4,7 @@ import { composer } from "$lib/state/composer.svelte";
 import { search } from "$lib/state/search.svelte";
 import { connect } from "$lib/state/connect.svelte";
 import { calendar } from "$lib/state/calendar.svelte";
+import { notes } from "$lib/state/notes.svelte";
 
 export interface Shortcut {
   keys: string;
@@ -19,6 +20,10 @@ export const SHORTCUTS: Shortcut[] = [
   { keys: "g t", label: "Go to Today", group: "Navigate" },
   { keys: "g b", label: "Toggle Connect beside mail / calendar", group: "Navigate" },
   { keys: "g c", label: "Go to Calendar", group: "Navigate" },
+  { keys: "g n", label: "Go to Notes", group: "Navigate" },
+  { keys: "n", label: "Notes: new note", group: "Compose" },
+  { keys: "Super N", label: "Quick note from anywhere", group: "Compose" },
+  { keys: "j / k", label: "Notes: next / previous", group: "Navigate" },
   { keys: "d / w / m / a / i", label: "Calendar: day / week / month / agenda / insights", group: "Navigate" },
   { keys: "[ / ]", label: "Calendar: move selected event a day back / forward", group: "Act" },
   { keys: "z", label: "Snooze", group: "Act" },
@@ -173,6 +178,10 @@ export function handleKey(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Escape") {
+    if (notes.captureOpen) {
+      notes.captureOpen = false;
+      return;
+    }
     if (app.moveTarget) app.moveTarget = null;
     else if (app.snoozeTarget) app.snoozeTarget = null;
     else if (app.paletteOpen) app.paletteOpen = false;
@@ -189,6 +198,7 @@ export function handleKey(e: KeyboardEvent) {
     }
     else if (calendar.detailsId && !isTyping(e)) calendar.openDetails(null);
     else if (calendar.cursor && !isTyping(e)) calendar.cursor = null;
+    else if (app.view.kind === "notes" && notes.selectedId && !isTyping(e)) notes.select(null);
     else if (app.agentOpen && !isTyping(e)) app.agentOpen = false;
     else if (isTyping(e)) (e.target as HTMLElement).blur();
     else if (app.checked.size) app.checked = new Set();
@@ -227,6 +237,7 @@ export function handleKey(e: KeyboardEvent) {
       a: () => app.setView({ kind: "unified", wellKnown: "archive" }),
       t: () => app.setView({ kind: "today" }),
       c: () => app.setView({ kind: "calendar" }),
+      n: () => app.setView({ kind: "notes" }),
       b: () => connect.toggle(),
       z: () => app.setView({ kind: "snoozed" }),
       j: () => calendar.joinNext(),
@@ -237,6 +248,35 @@ export function handleKey(e: KeyboardEvent) {
     if (map[e.key]) {
       e.preventDefault();
       map[e.key]();
+    }
+    return;
+  }
+
+  if (app.view.kind === "notes") {
+    const noteKeys: Record<string, () => void> = {
+      j: () => notes.move(1),
+      k: () => notes.move(-1),
+      ArrowDown: () => notes.move(1),
+      ArrowUp: () => notes.move(-1),
+      Enter: () => notes.selectedId || notes.move(0),
+      o: () => notes.selectedId || notes.move(0),
+      n: () => notes.startCapture(),
+      c: () => composer.compose(),
+      s: () => notes.togglePin(),
+      e: () => notes.archiveSelected(),
+      "#": () => notes.deleteSelected(),
+      Delete: () => notes.deleteSelected(),
+      "/": () => notes.focusSearch(),
+      "?": () => (app.cheatsheetOpen = !app.cheatsheetOpen),
+      g: () => {
+        pendingG = true;
+        gTimer = setTimeout(() => (pendingG = false), 900);
+      },
+    };
+    const fn = noteKeys[e.key];
+    if (fn) {
+      e.preventDefault();
+      fn();
     }
     return;
   }

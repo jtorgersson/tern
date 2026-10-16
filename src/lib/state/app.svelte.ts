@@ -26,7 +26,7 @@ import { errMsg } from "$lib/util/misc";
 import { openMessageWindow } from "$lib/util/windows";
 import { selectRange } from "$lib/util/selection";
 
-export type UiView = MessageView | { kind: "results"; title: string; ids: string[] };
+export type UiView = MessageView | { kind: "results"; title: string; ids: string[] } | { kind: "notes" };
 
 export const CATEGORY_META: Record<AiCategory, { label: string; color: string; short: string }> = {
   needs_reply: { label: "Needs reply", color: "var(--accent)", short: "Reply" },
@@ -141,7 +141,7 @@ class AppState {
       this.view.kind !== "folder",
   );
   /** Views that replace the list + reader with a single canvas. */
-  isCanvasView = $derived(this.view.kind === "today" || this.view.kind === "calendar");
+  isCanvasView = $derived(this.view.kind === "today" || this.view.kind === "calendar" || this.view.kind === "notes");
 
   private unlisten: UnlistenFn[] = [];
   private loadSeq = 0;
@@ -170,6 +170,8 @@ class AppState {
         this.scheduleTriage(1500);
         import("./calendar.svelte").then(({ calendar }) => calendar.load({ silent: true }));
         const mailto = await invoke<string | null>("take_pending_mailto");
+        const openNotes = await invoke<boolean>("take_pending_notes");
+        if (openNotes) this.view = { kind: "notes" };
         if (mailto) this.openMailto(mailto);
         else import("./composer.svelte").then(({ composer }) => composer.restore());
       }
@@ -453,13 +455,16 @@ class AppState {
     this.loading = true;
     try {
       let list: MessageSummary[];
-      if (this.view.kind === "today" || this.view.kind === "calendar") {
+      if (this.view.kind === "today" || this.view.kind === "calendar" || this.view.kind === "notes") {
         if (this.view.kind === "today") {
           const { today } = await import("./today.svelte");
           await today.load();
-        } else {
+        } else if (this.view.kind === "calendar") {
           const { calendar } = await import("./calendar.svelte");
           await calendar.load({ silent: calendar.loadedOnce });
+        } else {
+          const { notes } = await import("./notes.svelte");
+          await notes.load({ silent: notes.items.length > 0 });
         }
         if (seq !== this.loadSeq) return;
         this.messages = [];
@@ -512,7 +517,7 @@ class AppState {
   }
 
   async loadMore() {
-    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today" || this.view.kind === "calendar") return;
+    if (this.loading || !this.hasMore || this.view.kind === "results" || this.view.kind === "today" || this.view.kind === "calendar" || this.view.kind === "notes") return;
     const last = this.messages[this.messages.length - 1];
     if (!last) return;
     this.loading = true;
@@ -572,6 +577,8 @@ class AppState {
         return "Today";
       case "calendar":
         return "Calendar";
+      case "notes":
+        return "Notes";
       case "unified":
         return v.wellKnown === "inbox"
           ? this.accountFilter

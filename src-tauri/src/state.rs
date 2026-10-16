@@ -15,6 +15,8 @@ pub struct AppState {
     pub sync_kick: Notify,
     /// mailto: URL passed on the command line at launch, consumed once by the UI.
     pub pending_mailto: Mutex<Option<String>>,
+    /// `tern note` launched this process: open the notes library once.
+    pub pending_notes: Mutex<bool>,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
             auth_cancel: Mutex::new(None),
             sync_kick: Notify::new(),
             pending_mailto: Mutex::new(None),
+            pending_notes: Mutex::new(false),
         }
     }
 }

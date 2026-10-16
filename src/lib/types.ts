@@ -475,6 +475,68 @@ export interface AuthProgressEvent {
   message: string | null;
 }
 
+export interface Note {
+  id: string;
+  title: string;
+  excerpt: string;
+  body: string;
+  kind: "text" | "image" | string;
+  category: string;
+  tags: string[];
+  summary: string;
+  source: "capture" | "terminal" | "onedrive" | string;
+  sourcePath: string | null;
+  mime: string | null;
+  pinned: boolean;
+  archived: boolean;
+  edited: boolean;
+  createdAt: string;
+  updatedAt: string;
+  analyzedAt: string | null;
+}
+
+export interface NoteFacet {
+  category: string;
+  count: number;
+}
+
+export interface NotePage {
+  notes: Note[];
+  total: number;
+  archived: number;
+  unanalyzed: number;
+  facets: NoteFacet[];
+  revision: string;
+}
+
+export interface NoteQuery {
+  q?: string | null;
+  category?: string | null;
+  kind?: "text" | "image" | null;
+  archived?: boolean;
+  unanalyzed?: boolean;
+  sort?: "updated" | "created" | "title";
+  limit?: number;
+  offset?: number;
+}
+
+export interface NoteAnalysis {
+  id: string;
+  title: string;
+  category: string;
+  tags: string[];
+  summary: string;
+}
+
+export interface ImportReport {
+  added: number;
+  updated: number;
+  skipped: number;
+  scanned: number;
+  truncated: boolean;
+  root: string;
+}
+
 export const EVENTS = {
   syncStatus: "sync://status",
   mailChanged: "mail://changed",

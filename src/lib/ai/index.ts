@@ -8,6 +8,7 @@ export { configureAi, hasAi, DEFAULT_ANTHROPIC_MODEL } from "./config";
 export { AgentSession, type AgentEvent, type AgentContext } from "./agent";
 export { triage, triageInbox } from "./triage";
 export { summarizeThread, draftReply, rewrite, briefing, predraftReply, prepMeeting, coachInsights, followUpFromNotes, personBrief, PREDRAFT_INSTRUCTION, type BriefingInput } from "./writing";
+export { organizeNotes, askNotes, type NoteInsight } from "./notes";
 export { AiError, friendlyError, isAbort } from "./errors";
 export { resetBackends } from "./providers";
 export { textToHtml } from "./tools";

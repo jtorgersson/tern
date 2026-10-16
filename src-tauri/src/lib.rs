@@ -6,6 +6,7 @@ mod connect;
 mod db;
 mod graph;
 mod model;
+mod notes;
 mod secrets;
 mod settings;
 mod state;
@@ -20,6 +21,8 @@ pub fn run_automation(args: &[String]) -> anyhow::Result<()> {
     tokio::runtime::Runtime::new()?.block_on(automation::run(args))
 }
 
+pub use notes::{capture_note_cli, parse_note_cli, NoteCli};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's DMA-BUF renderer misbehaves on some NVIDIA/Wayland setups; let users opt out.
@@ -29,6 +32,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if notes::handle_instance_args(app, &args) {
+                return;
+            }
             if let Some(url) = args.iter().find(|a| a.starts_with("mailto:")) {
                 let _ = app.emit("app://mailto", url.clone());
             }
@@ -44,8 +50,14 @@ pub fn run() {
         .setup(|app| {
             let db = db::Db::open()?;
             let st = state::AppState::new(db);
-            *st.pending_mailto.lock().unwrap() = std::env::args().find(|a| a.starts_with("mailto:"));
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            *st.pending_mailto.lock().unwrap() = args.iter().find(|a| a.starts_with("mailto:")).cloned();
+            let capture = matches!(notes::parse_note_cli(&args), notes::NoteCli::Capture);
+            *st.pending_notes.lock().unwrap() = capture;
             app.manage(Arc::new(st));
+            if capture {
+                notes::open_capture(app.handle());
+            }
             theme::watch(app.handle().clone());
             sync::start(app.handle().clone());
             calendar::start_reminders(app.handle().clone());
@@ -113,6 +125,17 @@ pub fn run() {
             commands::event_get,
             commands::event_update,
             commands::event_delete,
+            notes::notes_list,
+            notes::notes_get,
+            notes::notes_create,
+            notes::notes_update,
+            notes::notes_meta,
+            notes::notes_apply,
+            notes::notes_delete,
+            notes::notes_import,
+            notes::notes_image,
+            notes::notes_revision,
+            notes::take_pending_notes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tern");

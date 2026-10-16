@@ -10,6 +10,7 @@ import type {
   EventDraft,
   EventFull,
   EventPatch,
+  ImportReport,
   FreeSlot,
   FreeSlotQuery,
   InviteAction,
@@ -21,6 +22,10 @@ import type {
   MessageFull,
   MessageQuery,
   MessageSummary,
+  Note,
+  NoteAnalysis,
+  NotePage,
+  NoteQuery,
   OutgoingMessage,
   PersonSummary,
   Settings,
@@ -134,4 +139,27 @@ export const api = {
   /** Deletes; when the user organizes a meeting with attendees it is cancelled (attendees notified, optional note). */
   eventDelete: (accountId: string, eventId: string, scope: EditScope = "occurrence", comment: string | null = null) =>
     invoke<void>("event_delete", { accountId, eventId, scope, comment }),
+  notesList: (query: NoteQuery = {}) => invoke<NotePage>("notes_list", { query }),
+  note: (id: string) => invoke<Note>("notes_get", { id }),
+  notesCreate: (draft: {
+    body: string;
+    title?: string;
+    source?: string;
+    category?: string;
+    kind?: string;
+    sourcePath?: string | null;
+    mime?: string | null;
+    tags?: string[];
+    summary?: string;
+  }) => invoke<Note>("notes_create", { draft }),
+  notesUpdate: (draft: { id: string; title: string; body: string; category: string; tags: string[] }) =>
+    invoke<Note>("notes_update", { draft }),
+  notesMeta: (patch: { id: string; pinned?: boolean; archived?: boolean; category?: string; tags?: string[] }) =>
+    invoke<Note>("notes_meta", { patch }),
+  notesApply: (items: NoteAnalysis[]) => invoke<number>("notes_apply", { items }),
+  notesDelete: (id: string) => invoke<void>("notes_delete", { id }),
+  notesImport: (root?: string | null) => invoke<ImportReport>("notes_import", { root: root ?? null }),
+  notesImage: (id: string) => invoke<{ mediaType: string; base64: string } | null>("notes_image", { id }),
+  notesRevision: () => invoke<string>("notes_revision"),
+  takePendingNotes: () => invoke<boolean>("take_pending_notes"),
 };
