@@ -470,19 +470,24 @@
 <section class="connect" data-connect aria-label="Connect workspace">
   <header class="heading">
     <MessageCircle size={19} />
-    <div class="brand"><strong>Connect</strong><span>Linked to Microsoft Teams</span></div>
+    <div class="brand"><strong>Connect</strong></div>
+    {#if account?.connectConsent && app.ownAccounts.length === 1 && !personal}
+      <button class="icon-btn" title={consenting ? "Connecting…" : "Reconnect"} aria-label="Reconnect" disabled={consenting} onclick={enable}><RefreshCw size={14} class={consenting ? "spin" : ""} /></button>
+    {/if}
     <button class="icon-btn" title="Open Microsoft Teams" aria-label="Open Microsoft Teams" onclick={() => external("https://teams.microsoft.com")}><ExternalLink size={15} /></button>
     <button class="icon-btn" title={connect.expanded ? "Dock beside mail and calendar" : "Expand Connect"} aria-label={connect.expanded ? "Dock Connect" : "Expand Connect"} onclick={() => connect.expanded = !connect.expanded}>
       {#if connect.expanded}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
     </button>
     <button class="icon-btn" aria-label="Close Connect" onclick={() => connect.toggle()}><X size={17} /></button>
   </header>
-  <div class="account-row">
-    <select aria-label="Connect account" bind:value={accountId} disabled={consenting}>
-      {#each app.ownAccounts as a (a.id)}<option value={a.id}>{a.email}</option>{/each}
-    </select>
-    {#if account?.connectConsent}<button class="text-btn" disabled={consenting} onclick={enable}>{consenting ? "Connecting…" : "Reconnect"}</button>{/if}
-  </div>
+  {#if app.ownAccounts.length > 1 || !account?.connectConsent || personal}
+    <div class="account-row">
+      <select aria-label="Connect account" bind:value={accountId} disabled={consenting}>
+        {#each app.ownAccounts as a (a.id)}<option value={a.id}>{a.email}</option>{/each}
+      </select>
+      {#if account?.connectConsent}<button class="text-btn" disabled={consenting} onclick={enable}>{consenting ? "Connecting…" : "Reconnect"}</button>{/if}
+    </div>
+  {/if}
   {#if consentError}<p class="error" role="alert">{consentError}</p>{/if}
   {#if !account || !account.connectConsent || personal}
     <div class="welcome">
@@ -622,7 +627,7 @@
   .heading { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); color: var(--accent); }
   .brand { flex: 1; display: flex; flex-direction: column; gap: 3px; }
   .brand strong { color: var(--fg-bright); font-size: 16px; }
-  .brand span, small { font-size: 11px; color: var(--muted); }
+  small { font-size: 11px; color: var(--muted); }
   .account-row { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
   select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); padding: 6px; font-size: 12px; }
   .welcome { margin: auto; max-width: 400px; padding: 28px; text-align: center; }

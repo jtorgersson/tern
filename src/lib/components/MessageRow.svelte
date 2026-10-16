@@ -98,7 +98,7 @@
     <div class="line2">
       <span class="subject">{m.subject || "(no subject)"}</span>
     </div>
-    {#if !compact}
+    {#if !compact && !m.isRead}
       <div class="line3">
         <span>{m.ai?.summary || m.preview}</span>
       </div>
