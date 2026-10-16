@@ -38,6 +38,7 @@
     FolderInput,
     Link2,
     TriangleAlert,
+    Ellipsis,
   } from "@lucide/svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { parseMailto } from "$lib/util/mailto";
@@ -45,10 +46,33 @@
   // ---- unsubscribe ----
   let unsubBusy = $state(false);
   let unsubDone = $state<string | null>(null);
+  let showPeople = $state(false);
+  let menu = $state(false);
+
   $effect(() => {
     void app.open?.id;
     unsubDone = null;
     hover = null;
+    showPeople = false;
+    menu = false;
+  });
+
+  $effect(() => {
+    if (!menu) return;
+    const close = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest(".overflow")) menu = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      menu = false;
+    };
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
   });
   async function unsubscribe(msg: MessageFull) {
     const u = msg.unsubscribe;
@@ -157,18 +181,31 @@
       <div class="who">
         <div class="line">
           <span class="name">{@render person(t.from)}</span>
-          <span class="email">{t.from.email}</span>
+          {#if primary}
+            <button class="quiet" aria-expanded={showPeople} onclick={() => (showPeople = !showPeople)}>
+              {#if showPeople}Hide details{:else}to {t.to.length === 0 ? "—" : t.to.length === 1 ? displayName(t.to[0]) : `${t.to.length} people`}{#if t.cc.length}, {t.cc.length} cc{/if}{/if}
+            </button>
+          {:else}
+            <span class="email">{t.from.email}</span>
+          {/if}
         </div>
-        <div class="line sub">
-          <span>to {#if t.to.length}{@render people(t.to)}{:else}—{/if}</span>
-          {#if t.cc.length}<span>· cc {@render people(t.cc)}</span>{/if}
-        </div>
+        {#if primary && showPeople}
+          <div class="line sub"><span class="email">{t.from.email}</span></div>
+        {/if}
+        {#if !primary || showPeople}
+          <div class="line sub">
+            <span>to {#if t.to.length}{@render people(t.to)}{:else}—{/if}</span>
+            {#if t.cc.length}<span>· cc {@render people(t.cc)}</span>{/if}
+          </div>
+        {/if}
       </div>
-      <time class="mono">{longTime(t.receivedAt)}</time>
+      <div class="when">
+        <MessageStatus message={t} compact />
+        <time class="mono">{longTime(t.receivedAt)}</time>
+      </div>
       {#if !primary}<button class="icon-btn" aria-label="Collapse related email" onclick={() => toggle(t.id)}><ChevronUp size={14} /></button>{/if}
     </header>
 
-    <div class="message-status"><MessageStatus message={t} /></div>
     <div class="content">
       <MailFrame html={t.bodyHtml} onlink={(l) => (hover = l)} />
     </div>
@@ -193,30 +230,37 @@
       <div class="group">
         <button class="icon-btn" title="Archive (e)" onclick={() => app.archive([m.id])}><Archive size={16} /></button>
         <button class="icon-btn" title="Delete (#)" onclick={() => app.trash([m.id])}><Trash2 size={16} /></button>
-        <button class="icon-btn" title="Move to folder (v)" onclick={() => app.openMove([m.id])}><FolderInput size={16} /></button>
-        <button class="icon-btn" class:on={m.isFlagged} title="Flag (s)" onclick={() => app.toggleFlag([m.id])}>
-          <Star size={16} fill={m.isFlagged ? "currentColor" : "none"} />
-        </button>
-        <button class="icon-btn" title="Mark unread (u)" onclick={() => app.setRead([m.id], false)}><MailOpen size={16} /></button>
         {#if m.snoozedUntil}
           <button class="icon-btn on" title="Snoozed — click to bring it back now" onclick={() => app.unsnooze([m.id])}><AlarmClock size={16} /></button>
         {:else}
           <button class="icon-btn" title="Snooze (z)" onclick={() => app.openSnooze([m.id])}><AlarmClock size={16} /></button>
         {/if}
+        <button class="icon-btn" class:on={m.isFlagged} title="Flag (s)" onclick={() => app.toggleFlag([m.id])}>
+          <Star size={16} fill={m.isFlagged ? "currentColor" : "none"} />
+        </button>
       </div>
-      <div class="group">
+      <div class="group reply-group">
         <button class="icon-btn" title="Reply (r)" onclick={() => composer.reply(m, "reply")}><Reply size={16} /></button>
         <button class="icon-btn" title="Reply all (R)" onclick={() => composer.reply(m, "replyAll")}><ReplyAll size={16} /></button>
         <button class="icon-btn" title="Forward (f)" onclick={() => composer.reply(m, "forward")}><Forward size={16} /></button>
-        {#if m.webLink}
-          <button class="icon-btn" title="Open in Outlook on the web" onclick={() => openUrl(m.webLink!)}><ExternalLink size={16} /></button>
-        {/if}
-        {#if app.windowKind === "main"}
-          <button class="icon-btn" title="Discuss this email in Connect" aria-label="Discuss in Connect" onclick={() => discussEmail(m)}><MessageCircle size={16} /></button>
-          <button class="icon-btn" title="Open in new window (O)" onclick={() => app.openInWindow(m.id)}><SquareArrowOutUpRight size={16} /></button>
-        {:else}
-          <button class="icon-btn" title="Close window (Esc)" onclick={() => getCurrentWindow().close()}><X size={16} /></button>
-        {/if}
+        <div class="overflow">
+          <button class="icon-btn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={menu} onclick={() => (menu = !menu)}><Ellipsis size={16} /></button>
+          {#if menu}
+            <div class="menu" role="menu">
+              <button role="menuitem" onclick={() => { menu = false; app.openMove([m.id]); }}><FolderInput size={14} /> Move to folder</button>
+              <button role="menuitem" onclick={() => { menu = false; app.setRead([m.id], false); }}><MailOpen size={14} /> Mark unread</button>
+              {#if m.webLink}
+                <button role="menuitem" onclick={() => { menu = false; openUrl(m.webLink!); }}><ExternalLink size={14} /> Open in Outlook</button>
+              {/if}
+              {#if app.windowKind === "main"}
+                <button role="menuitem" onclick={() => { menu = false; discussEmail(m); }}><MessageCircle size={14} /> Discuss in Connect</button>
+                <button role="menuitem" onclick={() => { menu = false; app.openInWindow(m.id); }}><SquareArrowOutUpRight size={14} /> Open in new window</button>
+              {:else}
+                <button role="menuitem" onclick={() => getCurrentWindow().close()}><X size={14} /> Close window</button>
+              {/if}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -311,16 +355,41 @@
     background: color-mix(in oklab, var(--surface) 92%, var(--bg-lighter));
   }
   .toolbar {
-    min-height: 52px;
+    min-height: 48px;
     flex-wrap: wrap;
     gap: 4px;
     flex: none;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 8px 10px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--line);
   }
+  .reply-group { margin-left: auto; }
+  .overflow { position: relative; }
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    min-width: 210px;
+    padding: 4px;
+    border-radius: var(--r);
+    background: var(--raised);
+    box-shadow: var(--shadow);
+  }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--fg);
+    text-align: left;
+  }
+  .menu button:hover { background: var(--hover); }
   .back-list { display: none; }
   .group {
     display: flex;
@@ -368,10 +437,15 @@
   .associated { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
   .associated h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
   .associated h3 span { color: var(--muted); font-size: 11px; font-weight: 400; }
-  .message-status:empty { display: none; }
-  .message-status { margin-bottom: 10px; }
+  .when {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
   .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
-  .collapsed.unread .cname { color: var(--fg-bright); }
+  .collapsed:not(.unread) .cname { color: var(--muted); font-weight: 500; }
+  .collapsed.unread .cname { color: var(--fg-bright); font-weight: 650; }
   .msg {
     margin-bottom: 14px;
   }
@@ -427,12 +501,25 @@
     color: var(--muted);
     user-select: text;
   }
+  .quiet {
+    font-size: 12px;
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 1px 4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .quiet:hover {
+    color: var(--fg);
+    background: var(--hover);
+  }
   .line.sub {
     font-size: 12px;
     color: var(--muted);
     margin-top: 1px;
   }
-  .msg-head time {
+  .when time {
     font-size: 11px;
     color: var(--muted);
     white-space: nowrap;

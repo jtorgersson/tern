@@ -51,9 +51,9 @@
     </div>
   {/if}
   <div class="plain">
-    <button class="btn" onclick={() => composer.reply(message, "reply")}><Reply size={14} /> Reply <kbd>r</kbd></button>
-    <button class="btn" onclick={() => composer.reply(message, "replyAll")}><ReplyAll size={14} /> Reply all <kbd>R</kbd></button>
-    <button class="btn" onclick={() => composer.reply(message, "forward")}><Forward size={14} /> Forward <kbd>f</kbd></button>
+    <button class="btn ghost" onclick={() => composer.reply(message, "reply")}><Reply size={14} /> Reply</button>
+    <button class="btn ghost" onclick={() => composer.reply(message, "replyAll")}><ReplyAll size={14} /> Reply all</button>
+    <button class="btn ghost" onclick={() => composer.reply(message, "forward")}><Forward size={14} /> Forward</button>
     {#if app.aiReady}
       <button class="btn ghost hintbtn" aria-expanded={aiOpen} onclick={() => aiOpen = !aiOpen}><Sparkles size={13} /> {aiOpen ? "Hide writing assistant" : "Draft with AI"}</button>
     {/if}
@@ -137,12 +137,10 @@
     gap: 6px;
     flex-wrap: wrap;
   }
-  .plain kbd {
-    font-size: 9.5px;
-    padding: 0 4px;
-    margin-left: 2px;
-  }
   .hintbtn {
-    color: var(--accent);
+    color: var(--muted);
+  }
+  .hintbtn:hover {
+    color: var(--fg);
   }
 </style>

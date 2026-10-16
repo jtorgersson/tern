@@ -470,19 +470,24 @@
 <section class="connect" data-connect aria-label="Connect workspace">
   <header class="heading">
     <MessageCircle size={19} />
-    <div class="brand"><strong>Connect</strong><span>Linked to Microsoft Teams</span></div>
+    <div class="brand"><strong>Connect</strong></div>
+    {#if account?.connectConsent && app.ownAccounts.length === 1 && !personal}
+      <button class="icon-btn" title={consenting ? "Connecting…" : "Reconnect"} aria-label="Reconnect" disabled={consenting} onclick={enable}><RefreshCw size={14} class={consenting ? "spin" : ""} /></button>
+    {/if}
     <button class="icon-btn" title="Open Microsoft Teams" aria-label="Open Microsoft Teams" onclick={() => external("https://teams.microsoft.com")}><ExternalLink size={15} /></button>
     <button class="icon-btn" title={connect.expanded ? "Dock beside mail and calendar" : "Expand Connect"} aria-label={connect.expanded ? "Dock Connect" : "Expand Connect"} onclick={() => connect.expanded = !connect.expanded}>
       {#if connect.expanded}<Minimize2 size={15} />{:else}<Maximize2 size={15} />{/if}
     </button>
     <button class="icon-btn" aria-label="Close Connect" onclick={() => connect.toggle()}><X size={17} /></button>
   </header>
-  <div class="account-row">
-    <select aria-label="Connect account" bind:value={accountId} disabled={consenting}>
-      {#each app.ownAccounts as a (a.id)}<option value={a.id}>{a.email}</option>{/each}
-    </select>
-    {#if account?.connectConsent}<button class="text-btn" disabled={consenting} onclick={enable}>{consenting ? "Connecting…" : "Reconnect"}</button>{/if}
-  </div>
+  {#if app.ownAccounts.length > 1 || !account?.connectConsent || personal}
+    <div class="account-row">
+      <select aria-label="Connect account" bind:value={accountId} disabled={consenting}>
+        {#each app.ownAccounts as a (a.id)}<option value={a.id}>{a.email}</option>{/each}
+      </select>
+      {#if account?.connectConsent}<button class="text-btn" disabled={consenting} onclick={enable}>{consenting ? "Connecting…" : "Reconnect"}</button>{/if}
+    </div>
+  {/if}
   {#if consentError}<p class="error" role="alert">{consentError}</p>{/if}
   {#if !account || !account.connectConsent || personal}
     <div class="welcome">
@@ -609,7 +614,7 @@
               onkeydown={(e) => { if (!e.isComposing && (e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void send(); } }}></textarea>
             {#if outgoingLength > MESSAGE_LIMIT}<p class="error" role="alert">Shorten your message or remove the quote to send.</p>{/if}
             <div class="compose-footer"><EmojiPicker onSelect={addEmoji} /><span>Ctrl + Enter to send</span>{#if outgoingLength > MESSAGE_LIMIT - 2000}<span class:over-limit={outgoingLength > MESSAGE_LIMIT} role="status">{outgoingLength.toLocaleString()} / 20,000</span>{/if}<button class="btn primary" disabled={!draft.trim() || sending || outgoingLength > MESSAGE_LIMIT} type="submit"><Send size={13} />{sending ? "Sending…" : "Send"}</button></div>
-            {#if refreshedAt}<div class="sync-status"><Check size={10} /> Updated {shortTime(refreshedAt)} · Refreshes every 15 seconds while visible</div>{/if}
+            {#if refreshedAt}<div class="sync-status"><Check size={10} /> Updated {shortTime(refreshedAt)}</div>{/if}
           </form>
         {:else}<div class="empty-state"><MessageCircle size={32} /><h3>Keep the conversation close</h3><p>Choose a chat or channel. Your mail and calendar stay right beside it.</p><button class="btn primary" onclick={() => startNew()}><Plus size={13} /> New conversation</button></div>{/if}
       </div>
@@ -622,7 +627,7 @@
   .heading { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); color: var(--accent); }
   .brand { flex: 1; display: flex; flex-direction: column; gap: 3px; }
   .brand strong { color: var(--fg-bright); font-size: 16px; }
-  .brand span, small { font-size: 11px; color: var(--muted); }
+  small { font-size: 11px; color: var(--muted); }
   .account-row { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
   select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); padding: 6px; font-size: 12px; }
   .welcome { margin: auto; max-width: 400px; padding: 28px; text-align: center; }
@@ -647,16 +652,20 @@
   .conversation-row:hover .pin-action, .conversation-row:focus-within .pin-action, .pin-action.is-pinned { opacity: 1; }
   .pinned { color: var(--fg-dim); }
   .conversation-copy em { font-style: normal; color: var(--accent); font-size: 10px; margin-left: 7px; }
-  .conversation { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; border-radius: 7px; }
+  .conversation { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; text-align: left; border-radius: 7px; }
   .conversation:hover { background: var(--panel); }
   .conversation.selected { background: var(--accent-soft); }
   .conversation-icon { font-size: 10px; font-weight: 650; color: var(--muted); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--panel); flex: none; }
   .conversation-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; flex: 1; }
-  .conversation.unread .conversation-copy strong { color: var(--fg-bright); font-weight: 700; }
+  .conversation.unread::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--accent); }
+  .conversation:not(.unread) .conversation-copy strong { color: var(--muted); font-weight: 450; }
+  .conversation.unread .conversation-copy strong { color: var(--fg-bright); font-weight: 650; }
+  .conversation.selected .conversation-copy strong { color: var(--fg-bright); }
+  .conversation:not(.unread) .conversation-copy small { color: color-mix(in oklab, var(--muted) 70%, transparent); }
   .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
   .read-filters { display: flex; gap: 5px; padding: 0 14px 8px; }
-  .read-filters button { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 4px; font-size: 11px; color: var(--muted); }
-  .read-filters .chosen { background: var(--hover); color: var(--fg-bright); box-shadow: inset 0 -2px var(--accent); }
+  .read-filters button { display: flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; color: var(--muted); }
+  .read-filters .chosen { background: var(--accent-soft); color: var(--fg-bright); }
   .badge { font-size: 10px; font-weight: 600; }
   .unread-divider { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 10px; margin: 0 0 16px; scroll-margin-top: 12px; }
   .unread-divider::before, .unread-divider::after { content: ""; height: 1px; flex: 1; background: var(--accent-line); }
@@ -668,7 +677,8 @@
   .conversation-pane.brief-open > :is(.bridges, .participants, .message-find, .messages, .new-messages, .compose) { display: none; }
   .conversation-switch { display: none; }
   .bridges { display: flex; flex-wrap: wrap; gap: 12px; padding: 5px 14px 9px; border-bottom: 1px solid var(--line); }
-  .bridges button { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--accent); }
+  .bridges button { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--muted); }
+  .bridges button:hover { color: var(--fg); }
   .conversation-heading { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   .conversation-heading > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .conversation-heading strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -694,7 +704,8 @@
   .compose-footer span { font-size: 10px; color: var(--muted); }
   .compose-footer .primary { margin-left: auto; }
   .text-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 11px; padding: 6px 0; }
-  .message-actions { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+  .message-actions { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; opacity: 0; }
+  .message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; }
   .load-more { display: block; color: var(--accent); font-size: 11px; padding: 10px; margin: auto; }
   .empty { padding: 12px; color: var(--muted); font-size: 12px; text-align: center; }
   .empty-state { margin: auto; text-align: center; max-width: 280px; padding: 25px; color: var(--muted); }

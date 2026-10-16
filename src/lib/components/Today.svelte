@@ -47,16 +47,13 @@
     if (app.view.kind === "today" && !today.loadedOnce) today.load();
   });
 
-  const stats = $derived.by(() => {
-    const parts: string[] = [];
-    parts.push(`${today.unreadCount} unread`);
-    if (today.needsReply.length) parts.push(`${today.needsReply.length} need${today.needsReply.length === 1 ? "s" : ""} a reply`);
-    if (today.visibleWaiting.length) parts.push(`${today.visibleWaiting.length} waiting on others`);
-    if (calendar.todayMeetings.length) parts.push(`${calendar.todayMeetings.length} meeting${calendar.todayMeetings.length === 1 ? "" : "s"}`);
-    if (calendar.unanswered.length) parts.push(`${calendar.unanswered.length} invite${calendar.unanswered.length === 1 ? "" : "s"} to answer`);
-    if (today.overdue.length) parts.push(`${today.overdue.length} overdue`);
-    return parts.join(" · ");
-  });
+  let askOpen = $state(false);
+
+  function openUnread() {
+    const onInbox = app.view.kind === "unified" && app.view.wellKnown === "inbox";
+    if (!onInbox) app.setView({ kind: "unified", wellKnown: "inbox" });
+    if (!app.unreadOnly) app.toggleUnreadOnly();
+  }
 
   const QUICK = [
     "What's the most urgent thing right now?",
@@ -125,61 +122,34 @@
             {#if today.loading && !today.loadedOnce}
               <span class="shimmer-text">Looking at your mail…</span>
             {:else}
-              {stats}
-              {#if app.triaging}<span class="dot-sep">·</span><span class="shimmer-text">Triaging…</span>{/if}
-              {#if today.predraftRunning}<span class="dot-sep">·</span><span class="shimmer-text">Drafting replies…</span>{/if}
+              {#if today.unreadCount}
+                <button class="stat" onclick={openUnread}>{today.unreadCount} unread</button>
+              {:else}
+                <span class="stat done">Inbox clear</span>
+              {/if}
+              {#if today.needsReply.length}
+                <button class="stat" onclick={() => app.setView({ kind: "category", category: "needs_reply" })}>{today.needsReply.length} to answer</button>
+              {/if}
+              {#if today.visibleWaiting.length}
+                <button class="stat" onclick={() => app.setView({ kind: "unified", wellKnown: "sentitems" })}>{today.visibleWaiting.length} waiting</button>
+              {/if}
+              {#if calendar.todayMeetings.length}
+                <button class="stat" onclick={() => app.setView({ kind: "calendar" })}>{calendar.todayMeetings.length} meeting{calendar.todayMeetings.length === 1 ? "" : "s"}</button>
+              {/if}
+              {#if calendar.unanswered.length}
+                <button class="stat attention" onclick={() => app.setView({ kind: "calendar" })}>{calendar.unanswered.length} invite{calendar.unanswered.length === 1 ? "" : "s"}</button>
+              {/if}
+              {#if today.overdue.length}
+                <span class="stat attention">{today.overdue.length} overdue</span>
+              {/if}
+              {#if app.triaging}<span class="stat shimmer-text">Triaging…</span>{/if}
+              {#if today.predraftRunning}<span class="stat shimmer-text">Drafting…</span>{/if}
             {/if}
           </div>
         </div>
-        <div class="hero-mark"><Logo size={44} /></div>
       </header>
 
-      <!-- Your day -->
       <DaySchedule />
-
-      <!-- Briefing -->
-      <div class="card briefing" class:busy={today.briefingBusy}>
-        <div class="card-head">
-          <span class="spark"><Sparkles size={13} /></span>
-          <span class="eyebrow accent">Briefing</span>
-          <span class="spacer"></span>
-          {#if app.aiReady}
-            {#if today.briefingBusy}
-              <LoaderCircle size={13} class="spin muted" />
-            {:else}
-              {#if today.briefingAt}<span class="when">{relative(new Date(today.briefingAt).toISOString())}</span>{/if}
-              <button class="mini" onclick={() => today.refreshBriefing()} title="Refresh briefing"><RotateCcw size={12} /> Refresh</button>
-            {/if}
-          {/if}
-        </div>
-        {#if !app.aiReady}
-          <div class="setup">
-            <p>Connect Claude or any OpenAI-compatible model and Tern will write you a briefing of what matters, draft replies ahead of time, and tell you who's waiting on you.</p>
-            <button class="btn primary" onclick={() => app.openSettings("ai")}>Set up AI <ArrowRight size={14} /></button>
-          </div>
-        {:else if today.briefingText}
-          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="md brief" onclick={mdLinkHandler}>{@html md(today.briefingText)}</div>
-        {:else if today.briefingBusy}
-          <div class="skeleton">
-            <span style:width="70%"></span><span style:width="95%"></span><span style:width="88%"></span><span style:width="52%"></span>
-          </div>
-        {:else if today.briefingError}
-          <div class="err">{today.briefingError} <button class="link" onclick={() => today.refreshBriefing()}>Try again</button></div>
-        {:else}
-          <div class="skeleton">
-            <span style:width="70%"></span><span style:width="95%"></span>
-          </div>
-        {/if}
-      </div>
-
-      {#if app.aiReady}
-        <div class="quick">
-          {#each QUICK as q}
-            <button class="qchip" onclick={() => ask(q)}><Sparkles size={11} />{q}</button>
-          {/each}
-        </div>
-      {/if}
 
       {#if today.calm}
         <div class="calm">
@@ -217,7 +187,7 @@
                       <time class="mono">{shortTime(m.receivedAt)}</time>
                     </div>
                     <button class="subject" onclick={() => openMsg(m)}>{m.subject || "(no subject)"}</button>
-                    {#if m.ai?.summary}<div class="summary">{m.ai.summary}</div>{/if}
+                    {#if !m.isRead && m.ai?.summary}<div class="summary">{m.ai.summary}</div>{/if}
                   </div>
                 </div>
                 {#if app.aiReady}<DraftCard message={m} compact />{/if}
@@ -231,8 +201,8 @@
         </section>
       {/if}
 
+      {#if today.visibleWaiting.length || today.due.length}
       <div class="two">
-        <!-- Waiting on others -->
         {#if today.visibleWaiting.length}
           <section class="group">
             <div class="group-head">
@@ -288,6 +258,54 @@
           </section>
         {/if}
       </div>
+      {/if}
+
+      <div class="card briefing" class:busy={today.briefingBusy}>
+        <div class="card-head">
+          <span class="spark"><Sparkles size={13} /></span>
+          <span class="eyebrow accent">Briefing</span>
+          <span class="spacer"></span>
+          {#if app.aiReady}
+            {#if today.briefingBusy}
+              <LoaderCircle size={13} class="spin muted" />
+            {:else}
+              {#if today.briefingAt}<span class="when">{relative(new Date(today.briefingAt).toISOString())}</span>{/if}
+              <button class="mini" onclick={() => today.refreshBriefing()} title="Refresh briefing"><RotateCcw size={12} /> Refresh</button>
+            {/if}
+          {/if}
+        </div>
+        {#if !app.aiReady}
+          <div class="setup">
+            <p>Connect Claude or any OpenAI-compatible model and Tern will write you a briefing of what matters, draft replies ahead of time, and tell you who's waiting on you.</p>
+            <button class="btn primary" onclick={() => app.openSettings("ai")}>Set up AI <ArrowRight size={14} /></button>
+          </div>
+        {:else if today.briefingText}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="md brief" onclick={mdLinkHandler}>{@html md(today.briefingText)}</div>
+        {:else if today.briefingBusy}
+          <div class="skeleton">
+            <span style:width="70%"></span><span style:width="95%"></span><span style:width="88%"></span><span style:width="52%"></span>
+          </div>
+        {:else if today.briefingError}
+          <div class="err">{today.briefingError} <button class="link" onclick={() => today.refreshBriefing()}>Try again</button></div>
+        {:else}
+          <div class="skeleton">
+            <span style:width="70%"></span><span style:width="95%"></span>
+          </div>
+        {/if}
+      </div>
+
+      {#if app.aiReady}
+        {#if askOpen}
+          <div class="quick">
+            {#each QUICK as q}
+              <button class="qchip" onclick={() => ask(q)}>{q}</button>
+            {/each}
+          </div>
+        {:else}
+          <button class="ask-day" onclick={() => (askOpen = true)}><Sparkles size={13} /> Ask about your day</button>
+        {/if}
+      {/if}
     </div>
   </div>
 </section>
@@ -334,17 +352,50 @@
     color: var(--fg-bright);
   }
   .stats {
-    margin-top: 8px;
-    font-size: 13px;
-    color: var(--fg-dim);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
   }
-  .dot-sep {
-    margin: 0 6px;
+  .stat {
+    display: inline-flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    background: var(--hover);
+  }
+  button.stat:hover {
+    color: var(--fg);
+    background: color-mix(in oklab, var(--fg) 9%, transparent);
+  }
+  .stat.done {
+    color: var(--muted);
+    background: transparent;
+    padding-left: 0;
+  }
+  .stat.attention {
+    color: var(--on-accent);
+    background: var(--accent);
+    font-weight: 600;
+  }
+  .ask-day {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    align-self: flex-start;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    font-size: 12.5px;
     color: var(--muted);
   }
-  .hero-mark {
-    opacity: 0.8;
-    filter: drop-shadow(0 6px 18px rgba(var(--accent-rgb), 0.35));
+  .ask-day:hover {
+    color: var(--fg);
+    background: var(--hover);
   }
 
   .card {
@@ -539,7 +590,12 @@
     padding: 14px 16px;
   }
   .card.reply.unread {
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 22%, var(--line));
+    box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--line);
+  }
+  .card.reply:not(.unread) .name,
+  .card.reply:not(.unread) .subject {
+    color: var(--muted);
+    font-weight: 480;
   }
   .row {
     display: flex;

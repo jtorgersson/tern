@@ -174,7 +174,7 @@
 
     <div class="quick" class:has={!!parsed}>
       <Zap size={13} />
-      <input bind:this={quickEl} bind:value={quick} placeholder="Quick add: “Lunch with Anna tomorrow 12”, “Styrelsemöte fre 14-15:30”…" onkeydown={onQuickKey} />
+      <input bind:this={quickEl} bind:value={quick} placeholder="Add an event" title="Try “Lunch with Anna tomorrow 12” or “Styrelsemöte fre 14-15:30”" onkeydown={onQuickKey} />
       {#if parsed}
         <span class="qp mono">{preview}</span>
         <button class="btn sm primary" onclick={submitQuick}>Add</button>
@@ -191,7 +191,7 @@
         <button class="icon-btn" onclick={briefPeriod} title="Ask Tern to brief you on this period"><Sparkles size={15} /></button>
       {/if}
       <button class="icon-btn" onclick={() => calendar.refresh()} title="Refresh"><RefreshCw size={14} /></button>
-      <button class="btn primary" onclick={() => calendar.openComposer()}><Plus size={14} /> New <kbd>n</kbd></button>
+      <button class="btn primary" title="New event (n)" onclick={() => calendar.openComposer()}><Plus size={14} /> New event</button>
     </div>
   </header>
 
@@ -263,14 +263,6 @@
           </div>
         {/if}
 
-        {#if app.aiReady}
-          <div class="rail-sec">
-            <div class="eyebrow">Ask Tern</div>
-            <button class="ai" onclick={() => ask("Find 30 min with ")}><Sparkles size={12} /> Find a time with…</button>
-            <button class="ai" onclick={() => ask("What's my next meeting about? Check related mail.")}><Sparkles size={12} /> Prep my next meeting</button>
-            <button class="ai" onclick={() => ask("Look at my week and suggest where I can protect 2 hours of focus time. Don't create anything yet.")}><Sparkles size={12} /> Protect focus time</button>
-          </div>
-        {/if}
         {/if}
       </aside>
     {/if}
@@ -382,9 +374,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-  .right kbd {
-    margin-left: 4px;
   }
   .seg {
     display: inline-flex;
