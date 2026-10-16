@@ -13,6 +13,7 @@
     ShieldAlert,
     Folder as FolderIcon,
     ChevronRight,
+    ChevronDown,
     Layers,
     Plus,
     Sun,
@@ -34,6 +35,10 @@
   ];
 
   let collapsed = $state<Record<string, boolean>>({});
+  let moreMail = $state(false);
+  const QUIET_MAIL: WellKnownFolder[] = ["archive", "deleteditems", "junkemail"];
+  const inQuietMail = $derived(app.view.kind === "unified" && QUIET_MAIL.includes(app.view.wellKnown));
+  const showMoreMail = $derived(moreMail || inQuietMail);
   let now = $state(Date.now());
   $effect(() => {
     const t = setInterval(() => (now = Date.now()), 30_000);
@@ -131,28 +136,43 @@
       {#each MAILBOXES as m (m.wk)}
         {@const v: UiView = { kind: "unified", wellKnown: m.wk }}
         {@const unread = m.wk === "inbox" || m.wk === "junkemail" ? app.unifiedUnread(m.wk) : 0}
-        <button class="item" class:active={isActive(v)} onclick={() => app.setView(v)}>
-          <m.icon size={15} />
-          <span class="name">{wkLabel(m.wk)}</span>
-          {#if unread}<span class="count" class:strong={m.wk === "inbox"}>{unread}</span>{/if}
-        </button>
-        {#if m.wk === "inbox"}
-          <button class="item" class:active={isActive({ kind: "flagged" })} onclick={() => app.setView({ kind: "flagged" })}>
-            <Star size={15} />
-            <span class="name">Flagged</span>
+        {@const quiet = QUIET_MAIL.includes(m.wk) && !(m.wk === "junkemail" && unread > 0)}
+        {#if m.wk === "archive" && !showMoreMail}
+          <button class="item" aria-expanded="false" onclick={() => (moreMail = true)}>
+            <ChevronRight size={15} />
+            <span class="name">More</span>
           </button>
-          {#if app.snoozedCount || app.view.kind === "snoozed"}
-            <button class="item" class:active={isActive({ kind: "snoozed" })} onclick={() => app.setView({ kind: "snoozed" })}>
-              <AlarmClock size={15} />
-              <span class="name">Snoozed</span>
-              {#if app.snoozedCount}<span class="count">{app.snoozedCount}</span>{/if}
+        {/if}
+        {#if showMoreMail || !quiet}
+          <button class="item" class:active={isActive(v)} onclick={() => app.setView(v)}>
+            <m.icon size={15} />
+            <span class="name">{wkLabel(m.wk)}</span>
+            {#if unread}<span class="count" class:strong={m.wk === "inbox"}>{unread}</span>{/if}
+          </button>
+          {#if m.wk === "inbox"}
+            <button class="item" class:active={isActive({ kind: "flagged" })} onclick={() => app.setView({ kind: "flagged" })}>
+              <Star size={15} />
+              <span class="name">Flagged</span>
             </button>
+            {#if app.snoozedCount || app.view.kind === "snoozed"}
+              <button class="item" class:active={isActive({ kind: "snoozed" })} onclick={() => app.setView({ kind: "snoozed" })}>
+                <AlarmClock size={15} />
+                <span class="name">Snoozed</span>
+                {#if app.snoozedCount}<span class="count">{app.snoozedCount}</span>{/if}
+              </button>
+            {/if}
           {/if}
         {/if}
       {/each}
+      {#if showMoreMail && !inQuietMail}
+        <button class="item" aria-expanded="true" onclick={() => (moreMail = false)}>
+          <ChevronDown size={15} />
+          <span class="name">Less</span>
+        </button>
+      {/if}
     </section>
 
-    {#if app.aiReady || hasCategories}
+    {#if hasCategories}
     <section>
       <div class="heading">
         <span class="eyebrow">Focus</span>
@@ -160,11 +180,13 @@
         {#each SMART_CATEGORIES as c (c)}
           {@const v: UiView = { kind: "category", category: c }}
           {@const n = app.categoryCounts[c] ?? 0}
-          <button class="item" class:active={isActive(v)} class:dim={!n} onclick={() => app.setView(v)}>
-            <span class="cat" style:background={CATEGORY_META[c].color}></span>
-            <span class="name">{CATEGORY_META[c].label}</span>
-            {#if n}<span class="count" class:strong={c === "needs_reply"}>{n}</span>{/if}
-          </button>
+          {#if n}
+            <button class="item" class:active={isActive(v)} onclick={() => app.setView(v)}>
+              <span class="cat" style:background={CATEGORY_META[c].color}></span>
+              <span class="name">{CATEGORY_META[c].label}</span>
+              <span class="count" class:strong={c === "needs_reply" || c === "action"}>{n}</span>
+            </button>
+          {/if}
         {/each}
     </section>
     {/if}
@@ -317,13 +339,6 @@
     color: var(--accent);
     opacity: 0.85;
   }
-  .item.dim {
-    opacity: 0.55;
-  }
-  .item.dim:hover,
-  .item.dim.active {
-    opacity: 1;
-  }
   .name {
     flex: 1;
     min-width: 0;
@@ -337,8 +352,16 @@
     color: var(--muted);
   }
   .count.strong {
-    color: var(--accent);
-    font-weight: 600;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 650;
+    font-size: 10px;
   }
   .cat {
     width: 8px;

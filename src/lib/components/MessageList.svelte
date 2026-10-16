@@ -73,7 +73,7 @@
   });
 </script>
 
-<section class="list">
+<section class="list" class:selecting={app.checked.size > 0}>
   <header>
     {#if app.checked.size}
       <div class="bulk">
@@ -90,6 +90,9 @@
     {:else}
       <div class="title">
         <h1>{app.viewTitle}</h1>
+        {#if app.messages.length}
+          <span class="quiet-count">{app.messages.length}{app.hasMore ? "+" : ""}</span>
+        {/if}
         {#if app.view.kind === "results"}
           <span class="badge"><Sparkles size={11} /> from Tern</span>
         {/if}
@@ -107,7 +110,7 @@
   </header>
 
   <div class="filter-bar">
-    <input type="checkbox" aria-label="Select all loaded messages" title="Select all loaded messages (Ctrl+A)" checked={allChecked} indeterminate={app.checked.size > 0 && !allChecked} disabled={!app.messages.length || app.loading} onchange={() => app.selectAllLoaded()} />
+    <input class="select-all" type="checkbox" aria-label="Select all loaded messages" title="Select all loaded messages (Ctrl+A)" checked={allChecked} indeterminate={app.checked.size > 0 && !allChecked} disabled={!app.messages.length || app.loading} onchange={() => app.selectAllLoaded()} />
     <div class="filters" role="group" aria-label="Filter messages">
       <button class:active={!filtered} aria-pressed={!filtered} onclick={() => app.clearMailFilters()}>All</button>
       <button class:active={app.unreadOnly} aria-pressed={app.unreadOnly} title="Unread only (U)" onclick={() => app.toggleUnreadOnly()}>Unread</button>
@@ -147,17 +150,19 @@
       <div class="more"><LoaderCircle size={14} class="spin" /></div>
     {/if}
   </div>
-  <footer><span>{app.checked.size ? `${app.checked.size} selected · ${app.messages.length} loaded` : `${app.messages.length}${app.hasMore ? "+" : ""} messages`}</span><span title="Use j and k to navigate; e to archive; v to move">j / k navigate · e archive · v move</span></footer>
 </section>
 
 <style>
-  .filter-bar { display: flex; align-items: center; gap: 10px; padding: 0 16px 12px; border-bottom: 1px solid var(--line); }
-  .filter-bar input { margin: 0; flex: none; width: 14px; height: 14px; cursor: pointer; }
-  .filters { display: flex; gap: 3px; flex-wrap: wrap; }
-  .filters button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px; font-size: 11.5px; color: var(--muted); }
+  .filter-bar { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; }
+  .select-all { margin: 0; flex: none; width: 0; height: 14px; opacity: 0; pointer-events: none; }
+  .filter-bar:hover .select-all,
+  .filter-bar:focus-within .select-all,
+  .selecting .select-all { width: 14px; opacity: 1; pointer-events: auto; cursor: pointer; }
+  .filters { display: flex; gap: 2px; flex-wrap: wrap; }
+  .filters button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; font-size: 11.5px; color: var(--muted); }
   .filters button:hover { color: var(--fg); background: var(--hover); }
-  .filters button.active { color: var(--fg-bright); background: var(--hover); box-shadow: inset 0 -2px var(--accent); }
-  footer { display: flex; justify-content: space-between; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; flex-wrap: wrap; }
+  .filters button.active { color: var(--fg-bright); background: var(--accent-soft); }
+  .quiet-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .list-error { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 18px; color: var(--red); overflow-wrap: anywhere; }
   .initial-loading { display: flex; justify-content: center; gap: 8px; padding: 48px 16px; color: var(--muted); }
   .list {
@@ -235,9 +240,8 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    padding: 10px 20px 6px;
+    padding: 14px 18px 4px;
     background: var(--surface);
-    border-bottom: 1px solid var(--line);
   }
   .empty {
     display: flex;

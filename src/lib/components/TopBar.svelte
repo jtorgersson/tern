@@ -45,7 +45,7 @@
       bind:this={input}
       bind:value={q}
       aria-label="Search mail, calendar, and Connect"
-      placeholder="Search mail, calendar, and Connect…"
+      placeholder="Search"
       title="Mail understands from:  to:  subject:  has:attachment  is:unread  is:flagged  in:sent  before:2026-10-01  after:7d"
       spellcheck="false"
       onkeydown={(e) => {
@@ -83,8 +83,7 @@
       title="Ask Tern (Ctrl J)"
       onclick={() => app.toggleAgent()}>
       <Sparkles size={14} />
-      <span>Ask Tern</span>
-      <kbd>^J</kbd>
+      <span>Ask</span>
     </button>
     <button class="icon-btn" title="Settings (Ctrl ,)" aria-label="Settings" onclick={() => app.openSettings()}>
       <Settings size={15} />
@@ -161,7 +160,7 @@
   .compose { margin: 0 6px; }
   @media (max-width: 1050px) {
     .bar { grid-template-columns: auto minmax(180px, 1fr) auto; }
-    .ask span, .ask kbd { display: none; }
+    .ask span { display: none; }
     .brand .word { display: none; }
   }
   @media (max-width: 720px) {
@@ -190,10 +189,5 @@
   .ask:hover,
   .ask.on {
     background: var(--hover);
-  }
-  .ask kbd {
-    border-color: color-mix(in oklab, var(--accent) 30%, transparent);
-    color: color-mix(in oklab, var(--accent) 80%, var(--fg));
-    background: transparent;
   }
 </style>

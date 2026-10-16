@@ -106,7 +106,8 @@
 {/if}
 
 <style>
-  .summary-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 12px; padding: 8px 0; }
+  .summary-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 8px 0; }
+  .summary-toggle:hover { color: var(--fg); }
   .summary-toggle kbd { font-size: 10px; color: var(--muted); }
   .tldr:not(.active) { padding: 0; background: none; box-shadow: none; margin: 12px 0 0; animation: none; }
   .tldr.active { margin-top: 18px; }

@@ -14,5 +14,5 @@
 <style>
   .status, .status > span { display: inline-flex; align-items: center; gap: 5px; }
   .status { color: var(--muted); font-size: 11px; gap: 10px; flex: none; }
-  .status.compact { color: var(--accent); gap: 3px; }
+  .status.compact { color: var(--muted); gap: 3px; }
 </style>

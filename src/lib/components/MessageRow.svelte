@@ -6,7 +6,7 @@
   import { displayName } from "$lib/util/misc";
   import Avatar from "./Avatar.svelte";
   import MessageStatus from "./MessageStatus.svelte";
-  import { AlarmClock, Paperclip, Star, Archive, Trash2, Mail, MailOpen, Sparkles, Check, CalendarDays } from "@lucide/svelte";
+  import { AlarmClock, Paperclip, Star, Archive, Trash2, Mail, MailOpen, Check, CalendarDays } from "@lucide/svelte";
 
   let {
     m,
@@ -20,7 +20,10 @@
   const isSentView = $derived(app.view.kind === "unified" && (app.view.wellKnown === "sentitems" || app.view.wellKnown === "drafts"));
   const who = $derived(isSentView ? (m.to[0] ?? m.from) : m.from);
   const cat = $derived(m.ai ? CATEGORY_META[m.ai.category] : null);
-  const showCat = $derived(m.ai && app.view.kind !== "category" && m.ai.category !== "fyi");
+  // Only the two categories that ask for a response get a mark. The rest stay in Focus.
+  const showCat = $derived(
+    !!cat && app.view.kind !== "category" && (m.ai?.category === "needs_reply" || m.ai?.category === "action"),
+  );
 
   function stop(e: Event, fn: () => void) {
     e.stopPropagation();
@@ -36,8 +39,10 @@
   class:unread={!m.isRead}
   class:checked
   class:compact
+  class:unified={showAccount}
   role="listitem"
   aria-current={selected ? "true" : undefined}
+  aria-label={`${m.isRead ? "" : "Unread, "}${showCat && cat ? `${cat.label}, ` : ""}${displayName(who)}, ${m.subject || "no subject"}`}
   tabindex={selected ? 0 : -1}
   data-id={m.id}
   onclick={(e) => (e.shiftKey || e.ctrlKey || e.metaKey ? app.toggleCheck(m.id, e.shiftKey) : app.select(m.id))}
@@ -65,19 +70,21 @@
 
   <div class="body">
     <div class="line1">
-      {#if !m.isRead}<span class="udot" aria-hidden="true"></span>{/if}
       <span class="from">{isSentView ? "To: " : ""}{displayName(who)}</span>
       {#if m.importance === "high" || m.ai?.priority === 3}<span class="prio" title="High priority">!</span>{/if}
+      {#if showCat && cat}<span class="pip" style:background={cat.color} title={cat.label}></span>{/if}
       <span class="spacer"></span>
-      <MessageStatus message={m} compact />
-      {#if m.meetingType && m.meetingType !== "none"}<CalendarDays size={12} class="meta-ic cal" />{/if}
-      {#if m.hasAttachments}<Paperclip size={12} class="meta-ic" />{/if}
-      {#if m.isFlagged}<Star size={12} class="flag" fill="currentColor" />{/if}
-      {#if m.snoozedUntil}
-        <span class="time mono snz" title="Snoozed until {longTime(m.snoozedUntil)}"><AlarmClock size={11} /> {shortTime(m.snoozedUntil)}</span>
-      {:else}
-        <span class="time mono">{shortTime(m.receivedAt)}</span>
-      {/if}
+      <span class="meta">
+        <MessageStatus message={m} compact />
+        {#if m.meetingType && m.meetingType !== "none"}<CalendarDays size={12} class="meta-ic cal" />{/if}
+        {#if m.hasAttachments}<Paperclip size={12} class="meta-ic" />{/if}
+        {#if m.isFlagged}<Star size={12} class="flag" fill="currentColor" />{/if}
+        {#if m.snoozedUntil}
+          <span class="time mono snz" title="Snoozed until {longTime(m.snoozedUntil)}"><AlarmClock size={11} /> {shortTime(m.snoozedUntil)}</span>
+        {:else}
+          <span class="time mono">{shortTime(m.receivedAt)}</span>
+        {/if}
+      </span>
       <span class="hover-actions">
         <button title="Archive (e)" onclick={(e) => stop(e, () => app.archive([m.id]))}><Archive size={14} /></button>
         <button title="Delete (#)" onclick={(e) => stop(e, () => app.trash([m.id]))}><Trash2 size={14} /></button>
@@ -90,18 +97,10 @@
     </div>
     <div class="line2">
       <span class="subject">{m.subject || "(no subject)"}</span>
-      {#if showCat && cat}
-        <span class="chip" style:color={cat.color} style:background="color-mix(in oklab, {cat.color} 14%, transparent)">{cat.short}</span>
-      {/if}
     </div>
     {#if !compact}
       <div class="line3">
-        {#if m.ai?.summary}
-          <Sparkles size={11} class="ai-ic" />
-          <span class="summary">{m.ai.summary}</span>
-        {:else}
-          <span>{m.preview}</span>
-        {/if}
+        <span>{m.ai?.summary || m.preview}</span>
       </div>
     {/if}
   </div>
@@ -112,35 +111,51 @@
     position: relative;
     display: flex;
     gap: 10px;
-    padding: 11px 14px 11px 12px;
-    margin: 0;
-    border-bottom: 1px solid var(--line);
-    border-radius: 0;
+    padding: 10px 12px 10px 16px;
+    margin: 1px 6px;
+    border-radius: 8px;
     cursor: default;
     transition: background 120ms var(--ease);
   }
   .row.compact {
-    padding: 8px 12px 8px 10px;
+    padding: 7px 10px 7px 16px;
     gap: 8px;
   }
   .row:hover {
     background: var(--hover);
   }
   .row.selected {
-    background: color-mix(in oklab, var(--selection) 55%, transparent);
-    box-shadow: inset 2px 0 var(--accent);
+    background: color-mix(in oklab, var(--selection) 72%, transparent);
   }
   .row.checked {
     background: var(--active);
   }
+  /* One mark for unread, in the same place on every row, so read mail can stay quiet. */
+  .row.unread::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--accent);
+  }
   .stripe {
     position: absolute;
-    left: 2px;
+    left: 5px;
     top: 14px;
     bottom: 14px;
     width: 3px;
     border-radius: 3px;
-    opacity: 0.85;
+    opacity: 0.9;
+  }
+  .row.unified.unread::before {
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    border-radius: 0;
   }
   .lead {
     flex: none;
@@ -163,9 +178,8 @@
     border-radius: 50%;
     transition: opacity var(--t);
   }
-  /* Read mail fades a notch so unread rows stand out without any extra ink. */
   .row:not(.unread):not(.checked) .avatar-wrap {
-    opacity: 0.68;
+    opacity: 0.55;
   }
   .tick {
     display: grid;
@@ -192,27 +206,27 @@
   .from {
     font-size: 13px;
     font-weight: 450;
-    color: color-mix(in oklab, var(--fg-dim) 80%, var(--muted));
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .unread .from {
     color: var(--fg-bright);
-    font-weight: 700;
+    font-weight: 650;
   }
-  .udot {
-    width: 8px;
-    height: 8px;
+  .pip {
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     flex: none;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
   }
-  .compact .udot {
-    width: 7px;
-    height: 7px;
-    box-shadow: 0 0 0 2px var(--accent-soft);
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    min-width: 0;
   }
   .prio {
     font-weight: 800;
@@ -234,9 +248,10 @@
     font-size: 11px;
     color: var(--muted);
     flex: none;
+    font-variant-numeric: tabular-nums;
   }
   .unread .time {
-    color: var(--accent);
+    color: var(--fg-dim);
     font-weight: 600;
   }
   .hover-actions {
@@ -262,12 +277,8 @@
   .row:hover .hover-actions, .row:focus-within .hover-actions {
     display: flex;
   }
-  .row:hover .time,
-  .row:focus-within .time,
-  .row:focus-within :global(.flag),
-  .row:focus-within :global(.meta-ic),
-  .row:hover :global(.flag),
-  .row:hover :global(.meta-ic) {
+  .row:hover .meta,
+  .row:focus-within .meta {
     display: none;
   }
   .line2 {
@@ -279,39 +290,32 @@
   .subject {
     flex: 1;
     min-width: 0;
-    font-size: 13px;
-    color: color-mix(in oklab, var(--fg-dim) 80%, var(--muted));
+    font-size: 12.5px;
+    font-weight: 450;
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .unread .subject {
-    color: var(--fg-bright);
-    font-weight: 620;
-  }
-  .unread .line3 {
-    color: var(--fg-dim);
+    color: var(--fg);
+    font-weight: 560;
   }
   .line3 {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--muted);
     min-width: 0;
+  }
+  .unread .line3 {
+    color: var(--fg-dim);
   }
   .line3 span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .line3 :global(.ai-ic) {
-    color: var(--accent);
-    flex: none;
-    opacity: 0.85;
-  }
-  .summary {
-    color: color-mix(in oklab, var(--fg-dim) 85%, var(--accent));
   }
   .snz {
     display: inline-flex;
