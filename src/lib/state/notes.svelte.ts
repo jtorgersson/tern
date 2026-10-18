@@ -224,7 +224,7 @@ class NotesState {
       await this.load({ silent: true });
       const parts = [`${report.added} new`];
       if (report.updated) parts.push(`${report.updated} updated`);
-      toasts.show(`OneDrive/notes · ${parts.join(", ")}`, { kind: "success", timeout: 5000 });
+      toasts.show(`Imported ${parts.join(", ")}`, { kind: "success", timeout: 5000 });
       return report;
     } catch (e) {
       toasts.error(errMsg(e));

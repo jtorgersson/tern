@@ -436,6 +436,8 @@ export interface Settings {
     /** End new meetings early: 0 = off, 5 or 10 minutes (Speedy meetings). */
     speedyMeetings: number;
   };
+  /** Folder of text files and pictures Tern can import. */
+  notes: { folder: string };
 }
 
 export type Contrast = "theme" | "higher" | "highest";

@@ -10,7 +10,7 @@ pub fn path() -> PathBuf {
 }
 
 pub fn defaults() -> Value {
-    json!({
+    let mut s = json!({
         "microsoft": { "clientId": "", "tenant": "common" },
         "ai": {
             "providers": [],
@@ -45,8 +45,32 @@ pub fn defaults() -> Value {
             "hiddenCalendars": [],
             "secondaryTimeZone": null,
             "speedyMeetings": 0
-        }
-    })
+        },
+        "notes": { "folder": "" }
+    });
+    if let Some(folder) = s.pointer_mut("/notes/folder") {
+        *folder = json!(default_notes_folder());
+    }
+    s
+}
+
+/// Folder Tern imports notes from. Empty settings fall back to ~/OneDrive/notes.
+pub fn default_notes_folder() -> String {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/home/john"))
+        .join("OneDrive")
+        .join("notes")
+        .display()
+        .to_string()
+}
+
+pub fn notes_folder(s: &Value) -> PathBuf {
+    let configured = s.pointer("/notes/folder").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if configured.is_empty() {
+        PathBuf::from(default_notes_folder())
+    } else {
+        PathBuf::from(configured)
+    }
 }
 
 fn merge(base: &mut Value, over: &Value) {

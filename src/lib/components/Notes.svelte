@@ -40,6 +40,15 @@
   }
 
   let searchEl = $state<HTMLInputElement | undefined>();
+  let folderEl = $state<HTMLInputElement | undefined>();
+
+  async function importFolder() {
+    const folder = folderEl?.value.trim();
+    if (folder != null && app.settings && folder !== app.settings.notes.folder) {
+      await app.patchSettings((st) => (st.notes.folder = folder));
+    }
+    await notes.importOneDrive();
+  }
   let title = $state("");
   let body = $state("");
   let category = $state("Inbox");
@@ -178,6 +187,18 @@
         {notes.total} {notes.total === 1 ? "note" : "notes"}
         {#if notes.unanalyzed && !notes.archived}<span> · {notes.unanalyzed} still unread by Tern</span>{/if}
       </p>
+      <label class="folder">
+        <FolderOpen size={13} />
+        <input
+          bind:this={folderEl}
+          spellcheck="false"
+          aria-label="Notes folder"
+          value={app.settings?.notes.folder ?? ""}
+          onchange={(e) => {
+            const folder = e.currentTarget.value.trim();
+            app.patchSettings((st) => (st.notes.folder = folder));
+          }} />
+      </label>
     </div>
     <label class="search">
       <Search size={14} />
@@ -194,9 +215,9 @@
         <option value="created">Created</option>
         <option value="title">Title</option>
       </select>
-      <button class="btn" onclick={() => notes.importOneDrive()} disabled={notes.importing}>
+      <button class="btn" onclick={importFolder} disabled={notes.importing}>
         {#if notes.importing}<LoaderCircle size={14} class="spin" />{:else}<FolderOpen size={14} />{/if}
-        OneDrive/notes
+        Import
       </button>
       <button class="btn" onclick={() => organize()} disabled={organizing}>
         {#if organizing}<LoaderCircle size={14} class="spin" />{:else}<Sparkles size={14} />{/if}
@@ -238,10 +259,10 @@
         <div class="empty">
           <div class="glyph"><NotebookPen size={28} /></div>
           <h2>Nothing filed here yet</h2>
-          <p>Press <kbd>Super</kbd> <kbd>N</kbd> from anywhere, or run <span class="mono">tern note "…"</span> in a terminal. Text and pictures in OneDrive/notes can be brought in too.</p>
+          <p>Press <kbd>Super</kbd> <kbd>N</kbd> from anywhere, or run <span class="mono">tern note "…"</span> in a terminal. Import brings in text and pictures from the folder above.</p>
           <div class="empty-actions">
             <button class="btn primary" onclick={() => notes.startCapture()}>New note</button>
-            <button class="btn" onclick={() => notes.importOneDrive()} disabled={notes.importing}>Import OneDrive/notes</button>
+            <button class="btn" onclick={importFolder} disabled={notes.importing}>Import folder</button>
           </div>
         </div>
       {:else}
@@ -369,6 +390,27 @@
     line-height: 1.05;
   }
   .titleblock p { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
+  .folder {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    max-width: 460px;
+    color: var(--muted);
+  }
+  .folder input {
+    flex: 1;
+    min-width: 180px;
+    border: 0;
+    border-bottom: 1px solid var(--line-strong);
+    outline: none;
+    background: transparent;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 2px 0;
+  }
+  .folder input:focus { color: var(--fg); border-bottom-color: var(--accent-line); }
   .search {
     flex: 1;
     display: flex;

@@ -2,7 +2,7 @@
   import { app } from "$lib/state/app.svelte";
   import { search } from "$lib/state/search.svelte";
   import { composer } from "$lib/state/composer.svelte";
-  import { Search, PenLine, Sparkles, Settings, RefreshCw, X } from "@lucide/svelte";
+  import { Search, PenLine, Sparkles, Settings, RefreshCw, X, NotebookPen } from "@lucide/svelte";
   import { connect } from "$lib/state/connect.svelte";
   import { MessageCircle } from "@lucide/svelte";
   import Logo from "./Logo.svelte";
@@ -73,6 +73,9 @@
       aria-label="Sync now"
       onclick={() => app.syncNow()}>
       <RefreshCw size={15} class={app.isSyncing ? "spin" : ""} />
+    </button>
+    <button class="btn" class:on={app.view.kind === "notes"} title="Notes (g n)" aria-label="Notes" aria-pressed={app.view.kind === "notes"} onclick={() => app.setView({ kind: "notes" })}>
+      <NotebookPen size={14} /><span>Notes</span>
     </button>
     <button class="btn primary compose" title="New email (c)" aria-label="New email" onclick={() => composer.compose()}>
       <PenLine size={14} /><span>New email</span>
@@ -158,6 +161,10 @@
     gap: 2px;
   }
   .compose { margin: 0 6px; }
+  .on {
+    background: var(--active);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+  }
   @media (max-width: 1050px) {
     .bar { grid-template-columns: auto minmax(180px, 1fr) auto; }
     .ask span { display: none; }

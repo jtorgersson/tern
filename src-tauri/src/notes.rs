@@ -164,9 +164,8 @@ pub fn parse_note_cli(args: &[String]) -> NoteCli {
     if text.is_empty() { NoteCli::Capture } else { NoteCli::Text(text) }
 }
 
-/// The only OneDrive location Tern reads. Nothing outside this folder is imported or opened.
-pub fn onedrive_root() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/john")).join("OneDrive").join("notes")
+fn library_root(st: &AppState) -> PathBuf {
+    crate::settings::notes_folder(&st.settings.read().unwrap())
 }
 
 fn now() -> String {
@@ -361,12 +360,11 @@ pub fn capture_note_cli(text: &str) -> Result<()> {
     Ok(())
 }
 
-fn path_allowed(path: &Path) -> bool {
-    let root = onedrive_root();
+fn path_allowed(path: &Path, root: &Path) -> bool {
     if path.exists() {
-        return under_root(path, &root);
+        return under_root(path, root);
     }
-    path.starts_with(&root)
+    path.starts_with(root)
 }
 
 fn under_root(path: &Path, root: &Path) -> bool {
@@ -646,9 +644,10 @@ pub fn notes_create(st: St, draft: NoteCreate) -> Result<Note, String> {
     }
     let category = draft.category.unwrap_or_else(|| "Inbox".into());
     let kind = if draft.kind.as_deref() == Some("image") { "image" } else { "text" };
-    let source_path = draft.source_path.as_deref().filter(|p| path_allowed(Path::new(p)));
+    let root = library_root(&st);
+    let source_path = draft.source_path.as_deref().filter(|p| path_allowed(Path::new(p), &root));
     if draft.source_path.as_ref().is_some_and(|p| !p.is_empty()) && source_path.is_none() {
-        return Err("That file is outside OneDrive/notes".into());
+        return Err("That file is outside the notes folder".into());
     }
     let mime = draft.mime.as_deref().or(if kind == "image" { None } else { Some("text/plain") });
     let note = insert_note(&st.db, &title, &body, kind, &category, source, source_path, mime, None, false).map_err(err)?;
@@ -761,13 +760,17 @@ pub fn notes_delete(st: St, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn notes_import(st: St, root: Option<String>) -> Result<ImportReport, String> {
-    let notes = onedrive_root();
-    if let Some(raw) = root.filter(|s| !s.trim().is_empty()) {
-        let path = PathBuf::from(raw);
-        if path != notes && !path_allowed(&path) {
-            return Err("Notes are only read from OneDrive/notes".into());
+    let configured = library_root(&st);
+    let notes = match root.filter(|s| !s.trim().is_empty()) {
+        Some(raw) => {
+            let path = PathBuf::from(raw.trim());
+            if path != configured && !path_allowed(&path, &configured) {
+                return Err("Set this folder in Settings → Notes, then import again".into());
+            }
+            configured
         }
-    }
+        None => configured,
+    };
     import_root(&st.db, &notes).map_err(err)
 }
 
@@ -779,7 +782,7 @@ pub fn notes_image(st: St, id: String) -> Result<Option<NoteImage>, String> {
     }
     let Some(path) = note.source_path else { return Ok(None) };
     let path = PathBuf::from(path);
-    if !under_root(&path, &onedrive_root()) {
+    if !under_root(&path, &library_root(&st)) {
         return Ok(None);
     }
     let mime = note.mime.unwrap_or_default();

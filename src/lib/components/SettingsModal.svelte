@@ -9,12 +9,13 @@
   import { errMsg } from "$lib/util/misc";
   import type { Account, AiProvider } from "$lib/types";
   import ProviderEditor from "./ProviderEditor.svelte";
-  import { X, Users, Sparkles, Palette, PenLine, RefreshCw, Plus, Trash2, Pencil, LoaderCircle, Check, CalendarDays } from "@lucide/svelte";
+  import { X, Users, Sparkles, Palette, PenLine, RefreshCw, Plus, Trash2, Pencil, LoaderCircle, Check, CalendarDays, NotebookPen } from "@lucide/svelte";
 
   const SECTIONS = [
     { id: "accounts", label: "Accounts", icon: Users },
     { id: "ai", label: "AI", icon: Sparkles },
     { id: "calendar", label: "Calendar", icon: CalendarDays },
+    { id: "notes", label: "Notes", icon: NotebookPen },
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "signatures", label: "Signatures", icon: PenLine },
     { id: "sync", label: "Sync", icon: RefreshCw },
@@ -370,6 +371,14 @@
               {/each}
             </div>
           {/if}
+        {:else if app.settingsSection === "notes"}
+          <h2>Notes</h2>
+          <p class="lead">Tern reads text files and pictures from one folder. Subfolders become categories. Nothing outside that folder is imported.</p>
+          <label class="block">
+            <span class="label">Folder</span>
+            <input class="field mono" spellcheck="false" bind:value={s.notes.folder} oninput={saveSoon} aria-label="Notes folder" />
+            <span class="hint">Default is ~/OneDrive/notes. Pictures preview when the folder is inside your home directory. Import again after changing it.</span>
+          </label>
         {:else if app.settingsSection === "appearance"}
           <h2>Appearance</h2>
           <p class="lead">Colors follow your Omarchy theme{app.theme ? ` (${app.theme.name})` : ""} and update live when you switch.</p>
